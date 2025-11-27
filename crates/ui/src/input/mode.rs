@@ -33,18 +33,31 @@ pub enum InputMode {
         highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
         diagnostics: DiagnosticSet,
     },
+    SingleLineCodeEditor {
+        language: SharedString,
+        highlighter: Rc<RefCell<Option<SyntaxHighlighter>>>,
+        diagnostics: DiagnosticSet,
+    },
 }
 
 #[allow(unused)]
 impl InputMode {
     #[inline]
     pub(super) fn is_single_line(&self) -> bool {
-        matches!(self, InputMode::SingleLine)
+        matches!(
+            self,
+            InputMode::SingleLine | InputMode::SingleLineCodeEditor { .. }
+        )
     }
 
     #[inline]
     pub(super) fn is_code_editor(&self) -> bool {
         matches!(self, InputMode::CodeEditor { .. })
+    }
+
+    #[inline]
+    pub(super) fn is_single_line_code_editor(&self) -> bool {
+        matches!(self, InputMode::SingleLineCodeEditor { .. })
     }
 
     #[inline]
@@ -142,6 +155,11 @@ impl InputMode {
                 language,
                 highlighter,
                 ..
+            }
+            | InputMode::SingleLineCodeEditor {
+                language,
+                highlighter,
+                ..
             } => {
                 if !force && highlighter.borrow().is_some() {
                     return;
@@ -191,6 +209,7 @@ impl InputMode {
     pub(super) fn diagnostics(&self) -> Option<&DiagnosticSet> {
         match self {
             InputMode::CodeEditor { diagnostics, .. } => Some(diagnostics),
+            InputMode::SingleLineCodeEditor { diagnostics, .. } => Some(diagnostics),
             _ => None,
         }
     }
@@ -198,6 +217,7 @@ impl InputMode {
     pub(super) fn diagnostics_mut(&mut self) -> Option<&mut DiagnosticSet> {
         match self {
             InputMode::CodeEditor { diagnostics, .. } => Some(diagnostics),
+            InputMode::SingleLineCodeEditor { diagnostics, .. } => Some(diagnostics),
             _ => None,
         }
     }

@@ -37,7 +37,7 @@ impl InputState {
         self.context_menu = Some(ContextMenu::MouseContext(self.mouse_context_menu.clone()));
 
         let is_code_editor = self.mode.is_code_editor();
-        if is_code_editor {
+        if is_code_editor || self.mode.is_single_line_code_editor() {
             self.handle_hover_definition(offset, window, cx);
         }
 

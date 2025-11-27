@@ -469,6 +469,17 @@ impl InputState {
         self
     }
 
+    pub fn single_line_code_editor(mut self, language: impl Into<SharedString>) -> Self {
+        let language: SharedString = language.into();
+        self.mode = InputMode::SingleLineCodeEditor {
+            language,
+            highlighter: Rc::new(RefCell::new(None)),
+            diagnostics: DiagnosticSet::new(&Rope::new()),
+        };
+        self.searchable = false;
+        self
+    }
+
     /// Set this input is searchable, default is false (Default true for Code Editor).
     pub fn searchable(mut self, searchable: bool) -> Self {
         debug_assert!(self.mode.is_multi_line());
@@ -521,7 +532,7 @@ impl InputState {
         self
     }
 
-    /// Set highlighter language for for [`InputMode::CodeEditor`] mode.
+    /// Set highlighter language for [`InputMode::CodeEditor`] and [`InputMode::SingleLineCodeEditor`]mode.
     pub fn set_highlighter(
         &mut self,
         new_language: impl Into<SharedString>,
@@ -529,6 +540,14 @@ impl InputState {
     ) {
         match &mut self.mode {
             InputMode::CodeEditor {
+                language,
+                highlighter,
+                ..
+            } => {
+                *language = new_language.into();
+                *highlighter.borrow_mut() = None;
+            }
+            InputMode::SingleLineCodeEditor {
                 language,
                 highlighter,
                 ..
@@ -544,6 +563,9 @@ impl InputState {
     fn reset_highlighter(&mut self, cx: &mut Context<Self>) {
         match &mut self.mode {
             InputMode::CodeEditor { highlighter, .. } => {
+                *highlighter.borrow_mut() = None;
+            }
+            InputMode::SingleLineCodeEditor { highlighter, .. } => {
                 *highlighter.borrow_mut() = None;
             }
             _ => {}
@@ -1256,7 +1278,7 @@ impl InputState {
         let offset = self.index_for_mouse_position(event.position);
         self.handle_mouse_move(offset, event, window, cx);
 
-        if self.mode.is_code_editor() {
+        if self.mode.is_code_editor() || self.mode.is_single_line_code_editor() {
             if let Some(diagnostic) = self
                 .mode
                 .diagnostics()

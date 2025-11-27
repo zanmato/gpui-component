@@ -216,7 +216,7 @@ impl TextElement {
         window: &mut Window,
         _cx: &App,
     ) -> Option<Hitbox> {
-        if !editor.mode.is_code_editor() {
+        if !editor.mode.is_code_editor() && !editor.mode.is_single_line_code_editor() {
             return None;
         }
 
