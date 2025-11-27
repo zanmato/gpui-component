@@ -645,6 +645,11 @@ impl InputState {
         // Ensure cursor to start when set text
         if self.mode.is_single_line() {
             self.selected_range = (self.text.len()..self.text.len()).into();
+
+            if self.mode.is_single_line_code_editor() {
+                self._pending_update = true;
+                self.lsp.reset();
+            }
         } else {
             self.selected_range.clear();
 
