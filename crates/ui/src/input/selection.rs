@@ -4,10 +4,27 @@ use gpui::{Context, Window};
 use ropey::Rope;
 use sum_tree::Bias;
 
-use crate::{RopeExt as _, input::InputState};
+use crate::{
+    RopeExt as _,
+    input::{InputState, Selection},
+};
+
+/// Unique identifier for a cursor/selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+pub struct CursorId(usize);
+
+impl CursorId {
+    pub fn new(id: usize) -> Self {
+        Self(id)
+    }
+
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CharType {
+pub(crate) enum CharType {
     /// a-z, A-Z, 0-9, _
     Word,
     /// '\t', ' ', '\u{00A0}' etc.
@@ -55,7 +72,7 @@ impl From<char> for CharType {
 
 impl CharType {
     /// Check if two CharTypes are connectable
-    fn is_connectable(self, c: char) -> bool {
+    pub(crate) fn is_connectable(self, c: char) -> bool {
         let other = CharType::from(c);
         match (self, other) {
             (CharType::Word, CharType::Word) => true,
@@ -74,8 +91,9 @@ impl InputState {
             return;
         };
 
-        self.selected_range = (range.start..range.end).into();
-        self.selected_word_range = Some(self.selected_range);
+        self.set_selection(range.start, range.end);
+        self.selected_word_range =
+            Some(Selection::new(CursorId::default(), range.start, range.end));
         cx.notify()
     }
 
@@ -84,13 +102,13 @@ impl InputState {
     /// The offset is the UTF-8 offset.
     pub(super) fn select_line(&mut self, offset: usize, _: &mut Window, cx: &mut Context<Self>) {
         let range = TextSelector::line_range(&self.text, offset);
-        self.selected_range = (range.start..range.end).into();
+        self.set_selection(range.start, range.end);
         self.selected_word_range = None;
         cx.notify()
     }
 }
 
-struct TextSelector;
+pub(crate) struct TextSelector;
 impl TextSelector {
     /// Select a line in the given text at the specified offset.
     ///
@@ -140,6 +158,161 @@ impl TextSelector {
         }
 
         Some(start..end)
+    }
+
+    /// Calculate the start of the previous word from the given offset.
+    ///
+    /// This function works from any offset, moving backward to find the start
+    /// of the previous word boundary.
+    pub fn previous_word_start_at(text: &Rope, offset: usize) -> usize {
+        if offset == 0 {
+            return 0;
+        }
+
+        // Convert to character-safe offset
+        let offset = text.clip_offset(offset, Bias::Left);
+        let Some(char) = text.char_at(offset) else {
+            return 0;
+        };
+
+        let char_type = CharType::from(char);
+
+        // Move backward to find word boundary (end of current word/whitespace region)
+        let mut current = offset;
+        let mut found_boundary = false;
+        let prev_chars = text.chars_at(current).reversed().take(256);
+
+        for ch in prev_chars {
+            if char_type.is_connectable(ch) {
+                // Still in the same word/whitespace region
+                current -= ch.len_utf8();
+            } else {
+                // Found a boundary
+                found_boundary = true;
+                break;
+            }
+        }
+
+        if !found_boundary {
+            return 0;
+        }
+
+        // Now handle two cases:
+        // 1. If we started from a word, return the start of the current word
+        // 2. If we started from whitespace, skip whitespace to find the previous word
+        let mut search_start = current;
+        let prev_chars = text.chars_at(current).reversed().take(256);
+
+        for ch in prev_chars {
+            let ch_type = CharType::from(ch);
+            if ch_type != CharType::Word {
+                // Skip non-word characters (whitespace, punctuation, etc.)
+                search_start -= ch.len_utf8();
+            } else {
+                // Found the start of a word
+                break;
+            }
+        }
+
+        // Now accumulate word characters to find the start of the word
+        let mut word_start = search_start;
+        let prev_chars = text.chars_at(search_start).reversed().take(256);
+
+        for ch in prev_chars {
+            let ch_type = CharType::from(ch);
+            if ch_type == CharType::Word {
+                word_start -= ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+
+        word_start
+    }
+
+    /// Calculate the start of the next word from the given offset.
+    ///
+    /// This function works from any offset, moving forward to find the start
+    /// of the next word boundary (after skipping whitespace).
+    pub fn next_word_start_at(text: &Rope, offset: usize) -> usize {
+        let text_len = text.len();
+        if offset >= text_len {
+            return text_len;
+        }
+
+        // Convert to character-safe offset
+        let offset = text.clip_offset(offset, Bias::Left);
+        let Some(char) = text.char_at(offset) else {
+            return text_len;
+        };
+
+        let char_type = CharType::from(char);
+        let mut end = offset + char.len_utf8();
+
+        // Move forward to find word boundary (end of current word/whitespace region)
+        let next_chars = text.chars_at(end).take(256);
+
+        for ch in next_chars {
+            if char_type.is_connectable(ch) {
+                // Still in the same word/whitespace region
+                end += ch.len_utf8();
+            } else {
+                // Found a boundary
+                break;
+            }
+        }
+
+        // Now skip past any non-word characters to find the start of the next word
+        let mut start_of_next_word = end;
+        let next_chars = text.chars_at(end).take(256);
+
+        for ch in next_chars {
+            let ch_type = CharType::from(ch);
+            if ch_type != CharType::Word {
+                // Skip non-word characters (whitespace, punctuation, etc.)
+                start_of_next_word += ch.len_utf8();
+            } else {
+                // Found the start of a word
+                break;
+            }
+        }
+
+        start_of_next_word
+    }
+
+    /// Calculate the end of the next word from the given offset.
+    ///
+    /// This function works from any offset, moving forward to find the end
+    /// of the next word (after the word itself, not the start).
+    pub fn next_word_end_at(text: &Rope, offset: usize) -> usize {
+        let text_len = text.len();
+        if offset >= text_len {
+            return text_len;
+        }
+
+        // Convert to character-safe offset
+        let offset = text.clip_offset(offset, Bias::Left);
+        let Some(char) = text.char_at(offset) else {
+            return text_len;
+        };
+
+        let char_type = CharType::from(char);
+        let mut end = offset + char.len_utf8();
+
+        // Move forward to find word boundary (end of current word/whitespace region)
+        let next_chars = text.chars_at(end).take(256);
+
+        for ch in next_chars {
+            if char_type.is_connectable(ch) {
+                // Still in the same word/whitespace region
+                end += ch.len_utf8();
+            } else {
+                // Found a boundary
+                break;
+            }
+        }
+
+        end
     }
 }
 

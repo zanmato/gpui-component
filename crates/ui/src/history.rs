@@ -78,10 +78,30 @@ where
         self.grouping = false;
     }
 
+    /// Force increment the version number, bypassing the time-based grouping.
+    /// This is useful after a complete edit operation to ensure subsequent edits
+    /// are in a new undo group.
+    pub fn force_new_group(&mut self) {
+        self.version += 1;
+        self.last_changed_at = Instant::now();
+    }
+
+    /// Simulate time passing by moving `last_changed_at` back in time.
+    /// This is only for testing purposes to trigger time-based grouping.
+    #[cfg(test)]
+    pub fn simulate_time_passed(&mut self, duration: Duration) {
+        self.last_changed_at = self
+            .last_changed_at
+            .checked_sub(duration)
+            .unwrap_or(self.last_changed_at);
+    }
+
     /// Increment the version number if the last change was made more than `GROUP_INTERVAL` milliseconds ago.
     fn inc_version(&mut self) -> usize {
         let t = Instant::now();
-        if !self.grouping && Some(self.last_changed_at.elapsed()) > self.group_interval {
+        // Only increment if enough time has passed (time-based grouping)
+        // Explicit grouping (start_grouping/end_grouping) is handled separately
+        if Some(self.last_changed_at.elapsed()) > self.group_interval {
             self.version += 1;
         }
 
@@ -95,6 +115,8 @@ where
     }
 
     /// Push a new change to the history.
+    ///
+    /// This clears the redo stack since making a new edit invalidates the "future" history.
     pub fn push(&mut self, item: I) {
         let version = self.inc_version();
 
@@ -105,6 +127,9 @@ where
         if self.unique {
             self.undos.retain(|c| *c != item);
             self.redos.retain(|c| *c != item);
+        } else {
+            // Clear redo stack when making a new edit
+            self.redos.clear();
         }
 
         let mut item = item;
@@ -225,20 +250,27 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].tab_index, 2);
 
+        // Redo should return the undone changes in reverse order
+        let changes = history.redo().unwrap();
+        assert_eq!(changes[0].tab_index, 2);
+
+        let changes = history.redo().unwrap();
+        assert_eq!(changes[0].tab_index, 1);
+
+        // Undo back to test push behavior
+        let changes = history.undo().unwrap();
+        assert_eq!(changes[0].tab_index, 1);
+
+        let changes = history.undo().unwrap();
+        assert_eq!(changes[0].tab_index, 2);
+
+        // This should clear the redo stack
         history.push(5.into());
 
-        let changes = history.redo().unwrap();
-        assert_eq!(changes[0].tab_index, 2);
+        // Redo should return None since redo stack was cleared
+        assert!(history.redo().is_none());
 
-        let changes = history.redo().unwrap();
-        assert_eq!(changes[0].tab_index, 1);
-
-        let changes = history.undo().unwrap();
-        assert_eq!(changes[0].tab_index, 1);
-
-        let changes = history.undo().unwrap();
-        assert_eq!(changes[0].tab_index, 2);
-
+        // Undo should return the newly pushed item
         let changes = history.undo().unwrap();
         assert_eq!(changes[0].tab_index, 5);
 

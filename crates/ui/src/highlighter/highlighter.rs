@@ -357,26 +357,42 @@ impl SyntaxHighlighter {
 
     /// Highlight the given text, returning a map from byte ranges to highlight captures.
     ///
-    /// Uses incremental parsing by `edit` to efficiently update the highlighter's state.
-    pub fn update(&mut self, edit: Option<InputEdit>, text: &Rope) {
+    /// Uses incremental parsing by applying `edits` to efficiently update the highlighter's state.
+    ///
+    /// Pass `None` for edits to force a full re-parse.
+    pub fn update(&mut self, edits: Option<&[InputEdit]>, text: &Rope) {
         if self.text.eq(text) {
             return;
         }
 
-        let edit = edit.unwrap_or(InputEdit {
-            start_byte: 0,
-            old_end_byte: 0,
-            new_end_byte: text.len(),
-            start_position: Point::new(0, 0),
-            old_end_position: Point::new(0, 0),
-            new_end_position: Point::new(0, 0),
-        });
+        // If no edits provided, create an empty edit for full re-parse
+        let edits = edits.unwrap_or(&[]);
+
+        let full_reparse_edit = if edits.is_empty() {
+            Some(InputEdit {
+                start_byte: 0,
+                old_end_byte: 0,
+                new_end_byte: text.len(),
+                start_position: Point::new(0, 0),
+                old_end_position: Point::new(0, 0),
+                new_end_position: Point::new(0, 0),
+            })
+        } else {
+            None
+        };
 
         let mut old_tree = self
             .tree
             .take()
             .unwrap_or(self.parser.parse("", None).unwrap());
-        old_tree.edit(&edit);
+
+        if let Some(edit) = &full_reparse_edit {
+            old_tree.edit(edit);
+        } else {
+            for edit in edits {
+                old_tree.edit(edit);
+            }
+        }
 
         let new_tree = self.parser.parse_with_options(
             &mut move |offset, _| {

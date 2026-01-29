@@ -4,8 +4,8 @@ use lsp_types::CodeAction;
 use std::ops::Range;
 
 use crate::input::{
-    popovers::{CodeActionItem, CodeActionMenu, ContextMenu},
     InputState, ToggleCodeActions,
+    popovers::{CodeActionItem, CodeActionMenu, ContextMenu},
 };
 
 pub trait CodeActionProvider {
@@ -67,7 +67,8 @@ impl InputState {
             }
         };
 
-        let range = self.selected_range.start..self.selected_range.end;
+        let selection_range = self.active_selection_range();
+        let range = selection_range.start..selection_range.end;
 
         let state = cx.entity();
         self._context_menu_task = cx.spawn_in(window, async move |editor, cx| {

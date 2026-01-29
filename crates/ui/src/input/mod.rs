@@ -31,5 +31,6 @@ pub use mask_pattern::MaskPattern;
 pub use number_input::{NumberInput, NumberInputEvent, StepAction};
 pub use otp_input::*;
 pub use rope_ext::{InputEdit, Point, RopeExt, RopeLines};
+pub use selection::CursorId;
 pub use ropey::Rope;
 pub use state::*;

@@ -37,8 +37,9 @@ impl InputState {
         }
 
         // Show Mouse context menu
-        if !self.selected_range.contains(offset) {
-            self.move_to(offset, None, cx);
+        let selection = self.active_selection();
+        if !selection.contains(offset) {
+            self.move_to_offset(offset, None, cx);
         }
 
         self.context_menu = Some(ContextMenu::MouseContext(self.mouse_context_menu.clone()));
@@ -51,7 +52,7 @@ impl InputState {
         let is_enable = !self.disabled;
         let has_goto_definition = is_enable && self.lsp.definition_provider.is_some();
         let has_code_action = is_enable && !self.lsp.code_action_providers.is_empty();
-        let is_selected = !self.selected_range.is_empty();
+        let is_selected = !self.active_selection().is_collapsed();
         let has_paste = is_enable && cx.read_from_clipboard().is_some();
 
         let action_context = self.focus_handle.clone();
