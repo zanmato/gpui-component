@@ -510,11 +510,20 @@ impl SyntaxHighlighter {
                 continue;
             };
 
+            let root_node = layer.tree.root_node();
+
+            // Find the smallest named node containing the visible range to limit traversal.
+            // If the descendant is an unnamed token, walk up to the first named ancestor.
+            let descendant = root_node.descendant_for_byte_range(range.start, range.end);
+            let query_node = descendant
+                .filter(|n| n.is_named())
+                .or_else(|| descendant.and_then(|n| n.parent()))
+                .unwrap_or(root_node);
+
             let mut query_cursor = QueryCursor::new();
             query_cursor.set_byte_range(range.clone());
 
-            let mut matches =
-                query_cursor.matches(query, layer.tree.root_node(), TextProvider(&self.text));
+            let mut matches = query_cursor.matches(query, query_node, TextProvider(&self.text));
 
             let mut last_end = 0usize;
             while let Some(m) = matches.next() {
@@ -536,9 +545,17 @@ impl SyntaxHighlighter {
             }
         }
 
+        // Find the smallest named node containing the visible range to limit traversal.
+        // If the descendant is an unnamed token, walk up to the first named ancestor.
+        let descendant = root_node.descendant_for_byte_range(range.start, range.end);
+        let query_node = descendant
+            .filter(|n| n.is_named())
+            .or_else(|| descendant.and_then(|n| n.parent()))
+            .unwrap_or(root_node);
+
         let mut cursor = QueryCursor::new();
         cursor.set_byte_range(range);
-        let mut matches = cursor.matches(&query, root_node, TextProvider(&source));
+        let mut matches = cursor.matches(&query, query_node, TextProvider(&source));
 
         while let Some(query_match) = matches.next() {
             for cap in query_match.captures {

@@ -61,7 +61,17 @@ pub fn extract_fold_ranges(tree: &Tree) -> Vec<FoldRange> {
 /// instead of O(all nodes in tree).
 pub fn extract_fold_ranges_in_range(tree: &Tree, byte_range: Range<usize>) -> Vec<FoldRange> {
     let mut ranges = Vec::new();
-    collect_foldable_nodes_in_range(tree.root_node(), &byte_range, &mut ranges);
+
+    // Find the smallest named node containing the byte range to limit traversal.
+    // If the descendant is an unnamed token, walk up to the first named ancestor.
+    let root = tree.root_node();
+    let descendant = root.descendant_for_byte_range(byte_range.start, byte_range.end);
+    let start_node = descendant
+        .filter(|n| n.is_named())
+        .or_else(|| descendant.and_then(|n| n.parent()))
+        .unwrap_or(root);
+
+    collect_foldable_nodes_in_range(start_node, &byte_range, &mut ranges);
 
     ranges.sort_by_key(|r| r.start_line);
     ranges.dedup_by_key(|r| r.start_line);
