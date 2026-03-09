@@ -1121,25 +1121,11 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = self.text.clone();
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let new_offset = TextSelector::previous_word_start_at(&text, sel.start);
-                let mut new_sel = sel.clone();
-                if new_sel.reversed {
-                    new_sel.start = new_offset;
-                } else {
-                    new_sel.end = new_offset;
-                }
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
+        self.extend_all_selections(
+            |s, sel| TextSelector::previous_word_start_at(&s.text, sel.cursor_offset()),
+            cx,
+        );
         self.pause_blink_cursor(cx);
-        cx.notify();
     }
 
     pub(super) fn select_to_next_word(
@@ -1148,25 +1134,11 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = self.text.clone();
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let new_offset = TextSelector::next_word_end_at(&text, sel.end);
-                let mut new_sel = sel.clone();
-                if new_sel.reversed {
-                    new_sel.start = new_offset;
-                } else {
-                    new_sel.end = new_offset;
-                }
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
+        self.extend_all_selections(
+            |s, sel| TextSelector::next_word_end_at(&s.text, sel.cursor_offset()),
+            cx,
+        );
         self.pause_blink_cursor(cx);
-        cx.notify();
     }
 
     /// Get start of line byte offset of cursor
@@ -1295,22 +1267,29 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.active_selection().is_collapsed() {
-            self.replace_text_in_range(None, "", window, cx);
-            self.pause_blink_cursor(cx);
-            return;
+        self.selections_before_edit = Some(self.selections.iter().cloned().collect());
+        let mut any_changed = false;
+        let mut new_selections = Vec::new();
+        for sel in self.selections.iter() {
+            if sel.is_collapsed() {
+                let mut line_start = self.start_of_line_at(sel.start);
+                if line_start == sel.start {
+                    line_start = line_start.saturating_sub(1);
+                }
+                if line_start != sel.start {
+                    new_selections.push(Selection::new(sel.id, line_start, sel.start));
+                    any_changed = true;
+                } else {
+                    new_selections.push(sel.clone());
+                }
+            } else {
+                new_selections.push(sel.clone());
+            }
         }
-
-        let mut offset = self.start_of_line();
-        if offset == self.cursor() {
-            offset = offset.saturating_sub(1);
+        if any_changed {
+            self.selections.replace_all(new_selections);
         }
-        self.replace_text_in_range_silent(
-            Some(self.range_to_utf16(&(offset..self.cursor()))),
-            "",
-            window,
-            cx,
-        );
+        self.replace_text_in_range(None, "", window, cx);
         self.pause_blink_cursor(cx);
     }
 
@@ -1320,22 +1299,29 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.active_selection().is_collapsed() {
-            self.replace_text_in_range(None, "", window, cx);
-            self.pause_blink_cursor(cx);
-            return;
+        self.selections_before_edit = Some(self.selections.iter().cloned().collect());
+        let mut any_changed = false;
+        let mut new_selections = Vec::new();
+        for sel in self.selections.iter() {
+            if sel.is_collapsed() {
+                let mut line_end = self.end_of_line_at(sel.start);
+                if line_end == sel.start {
+                    line_end = (line_end + 1).clamp(0, self.text.len());
+                }
+                if line_end != sel.start {
+                    new_selections.push(Selection::new(sel.id, sel.start, line_end));
+                    any_changed = true;
+                } else {
+                    new_selections.push(sel.clone());
+                }
+            } else {
+                new_selections.push(sel.clone());
+            }
         }
-
-        let mut offset = self.end_of_line();
-        if offset == self.cursor() {
-            offset = (offset + 1).clamp(0, self.text.len());
+        if any_changed {
+            self.selections.replace_all(new_selections);
         }
-        self.replace_text_in_range_silent(
-            Some(self.range_to_utf16(&(self.cursor()..offset))),
-            "",
-            window,
-            cx,
-        );
+        self.replace_text_in_range(None, "", window, cx);
         self.pause_blink_cursor(cx);
     }
 
@@ -1345,20 +1331,26 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.active_selection().is_collapsed() {
-            self.replace_text_in_range(None, "", window, cx);
-            self.pause_blink_cursor(cx);
-            return;
+        self.selections_before_edit = Some(self.selections.iter().cloned().collect());
+        let mut any_changed = false;
+        let mut new_selections = Vec::new();
+        for sel in self.selections.iter() {
+            if sel.is_collapsed() {
+                let word_start = TextSelector::previous_word_start_at(&self.text, sel.start);
+                if word_start != sel.start {
+                    new_selections.push(Selection::new(sel.id, word_start, sel.start));
+                    any_changed = true;
+                } else {
+                    new_selections.push(sel.clone());
+                }
+            } else {
+                new_selections.push(sel.clone());
+            }
         }
-
-        let offset =
-            TextSelector::previous_word_start_at(&self.text, self.active_selection().start);
-        self.replace_text_in_range_silent(
-            Some(self.range_to_utf16(&(offset..self.cursor()))),
-            "",
-            window,
-            cx,
-        );
+        if any_changed {
+            self.selections.replace_all(new_selections);
+        }
+        self.replace_text_in_range(None, "", window, cx);
         self.pause_blink_cursor(cx);
     }
 
@@ -1368,19 +1360,26 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.active_selection().is_collapsed() {
-            self.replace_text_in_range(None, "", window, cx);
-            self.pause_blink_cursor(cx);
-            return;
+        self.selections_before_edit = Some(self.selections.iter().cloned().collect());
+        let mut any_changed = false;
+        let mut new_selections = Vec::new();
+        for sel in self.selections.iter() {
+            if sel.is_collapsed() {
+                let word_end = TextSelector::next_word_end_at(&self.text, sel.start);
+                if word_end != sel.start {
+                    new_selections.push(Selection::new(sel.id, sel.start, word_end));
+                    any_changed = true;
+                } else {
+                    new_selections.push(sel.clone());
+                }
+            } else {
+                new_selections.push(sel.clone());
+            }
         }
-
-        let offset = TextSelector::next_word_end_at(&self.text, self.cursor());
-        self.replace_text_in_range_silent(
-            Some(self.range_to_utf16(&(self.cursor()..offset))),
-            "",
-            window,
-            cx,
-        );
+        if any_changed {
+            self.selections.replace_all(new_selections);
+        }
+        self.replace_text_in_range(None, "", window, cx);
         self.pause_blink_cursor(cx);
     }
 
