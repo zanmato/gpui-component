@@ -4,7 +4,7 @@ use crate::input::selection::TextSelector;
 use crate::input::{
     AddCursorAbove, AddCursorBelow, InputState, MoveDown, MoveEnd, MoveHome, MoveLeft,
     MovePageDown, MovePageUp, MoveRight, MoveToEnd, MoveToNextWord, MoveToPreviousWord,
-    MoveToStart, MoveUp, RopeExt as _, Selection,
+    MoveToStart, MoveUp, Rope, RopeExt as _, Selection,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -29,6 +29,13 @@ pub(super) enum CollapseDirection {
     ToStart,
     /// Collapse to end of selection (for moving down)
     ToEnd,
+}
+
+/// Compute a byte offset from a target row and preferred column, clamping to line length.
+pub(super) fn offset_at_row_column(text: &Rope, row: usize, preferred_column: usize) -> usize {
+    let line = text.slice_line(row);
+    let col = preferred_column.min(line.len());
+    text.line_start_offset(row) + col
 }
 
 impl InputState {
@@ -65,42 +72,32 @@ impl InputState {
     ) {
         match direction {
             MoveDirection::Left => {
-                let new_selections: Vec<Selection> = self
-                    .selections
-                    .iter()
-                    .map(|sel| {
-                        let new_offset = if sel.is_collapsed() {
-                            self.previous_boundary(sel.cursor_offset())
+                self.move_all_cursors(
+                    |s, sel| {
+                        let offset = if sel.is_collapsed() {
+                            s.previous_boundary(sel.cursor_offset())
                         } else {
                             sel.start
                         };
-                        let mut new_sel = sel.clone();
-                        new_sel.place_at(new_offset, sel.column_anchor);
-                        new_sel
-                    })
-                    .collect();
-
-                self.selections.replace_all(new_selections);
-                self.finish_move(self.cursor(), Some(MoveDirection::Left), cx);
+                        (offset, sel.column_anchor)
+                    },
+                    Some(MoveDirection::Left),
+                    cx,
+                );
             }
             MoveDirection::Right => {
-                let new_selections: Vec<Selection> = self
-                    .selections
-                    .iter()
-                    .map(|sel| {
-                        let new_offset = if sel.is_collapsed() {
-                            self.next_boundary(sel.cursor_offset())
+                self.move_all_cursors(
+                    |s, sel| {
+                        let offset = if sel.is_collapsed() {
+                            s.next_boundary(sel.cursor_offset())
                         } else {
                             sel.end
                         };
-                        let mut new_sel = sel.clone();
-                        new_sel.place_at(new_offset, sel.column_anchor);
-                        new_sel
-                    })
-                    .collect();
-
-                self.selections.replace_all(new_selections);
-                self.finish_move(self.cursor(), Some(MoveDirection::Right), cx);
+                        (offset, sel.column_anchor)
+                    },
+                    Some(MoveDirection::Right),
+                    cx,
+                );
             }
             MoveDirection::Up => {
                 if self.mode.is_single_line() {
@@ -148,6 +145,28 @@ impl InputState {
         self.hide_context_menu(cx);
         self.clear_inline_completion(cx);
         cx.notify();
+    }
+
+    /// Move all cursors using a closure that computes the new offset and column anchor
+    /// for each selection, then finalize the move.
+    fn move_all_cursors(
+        &mut self,
+        f: impl Fn(&Self, &Selection) -> (usize, Option<usize>),
+        direction: Option<MoveDirection>,
+        cx: &mut Context<Self>,
+    ) {
+        let new_selections: Vec<Selection> = self
+            .selections
+            .iter()
+            .map(|sel| {
+                let (offset, col_anchor) = f(self, sel);
+                let mut s = sel.clone();
+                s.place_at(offset, col_anchor);
+                s
+            })
+            .collect();
+        self.selections.replace_all(new_selections);
+        self.finish_move(self.cursor(), direction, cx);
     }
 
     /// Move all cursors vertically by the given number of lines while preserving column if possible.
@@ -198,27 +217,22 @@ impl InputState {
                     .buffer_line_to_display_row_range(cursor_point.row)
                     .map(|r| r.start)
                     .unwrap_or(0);
-                let max_display_row =
-                    self.display_map.display_row_count().saturating_sub(1);
+                let max_display_row = self.display_map.display_row_count().saturating_sub(1);
                 let target_display_row = if move_lines < 0 {
                     display_row.saturating_sub(move_lines.unsigned_abs())
                 } else {
                     (display_row + move_lines as usize).min(max_display_row)
                 };
-                let target_row =
-                    self.display_map.display_row_to_buffer_line(target_display_row);
+                let target_row = self
+                    .display_map
+                    .display_row_to_buffer_line(target_display_row);
 
                 // Clamp to valid row range
                 if target_row >= line_count {
                     return None;
                 }
 
-                // Get the target column, clamping to line length
-                let line = text.slice_line(target_row);
-                let target_column = preferred_column.min(line.len());
-
-                let line_start = text.line_start_offset(target_row);
-                let new_offset = line_start + target_column;
+                let new_offset = offset_at_row_column(text, target_row, preferred_column);
 
                 let mut new_sel = sel.clone();
                 new_sel.place_at(new_offset, Some(preferred_column));
@@ -289,38 +303,23 @@ impl InputState {
     }
 
     pub(super) fn home(&mut self, _: &MoveHome, _: &mut Window, cx: &mut Context<Self>) {
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let line_start = self.start_of_line_at(sel.cursor_offset());
-                let mut new_sel = sel.clone();
-                new_sel.place_at(line_start, Some(0));
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
-        self.finish_move(self.cursor(), None, cx);
+        self.move_all_cursors(
+            |s, sel| (s.start_of_line_at(sel.cursor_offset()), Some(0)),
+            None,
+            cx,
+        );
     }
 
     pub(super) fn end(&mut self, _: &MoveEnd, _: &mut Window, cx: &mut Context<Self>) {
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let cursor_offset = sel.cursor_offset();
-                let cursor_point = self.text.offset_to_point(cursor_offset);
-                let line_end = self.end_of_line_at(cursor_offset);
-                let column = cursor_point.column;
-                let mut new_sel = sel.clone();
-                new_sel.place_at(line_end, Some(column));
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
-        self.finish_move(self.cursor(), None, cx);
+        self.move_all_cursors(
+            |s, sel| {
+                let line_end = s.end_of_line_at(sel.cursor_offset());
+                let column = s.text.offset_to_point(sel.cursor_offset()).column;
+                (line_end, Some(column))
+            },
+            None,
+            cx,
+        );
     }
 
     pub(super) fn move_to_start(
@@ -329,34 +328,12 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let mut new_sel = sel.clone();
-                new_sel.place_at(0, None);
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
-        self.finish_move(0, None, cx);
+        self.move_all_cursors(|_, _| (0, None), None, cx);
     }
 
     pub(super) fn move_to_end(&mut self, _: &MoveToEnd, _: &mut Window, cx: &mut Context<Self>) {
         let doc_end = self.text.len();
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let mut new_sel = sel.clone();
-                new_sel.place_at(doc_end, None);
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
-        self.finish_move(doc_end, None, cx);
+        self.move_all_cursors(|_, _| (doc_end, None), None, cx);
     }
 
     pub(super) fn move_to_previous_word(
@@ -365,20 +342,16 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = self.text.clone();
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let new_offset = TextSelector::previous_word_start_at(&text, sel.cursor_offset());
-                let mut new_sel = sel.clone();
-                new_sel.place_at(new_offset, None);
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
-        self.finish_move(self.cursor(), None, cx);
+        self.move_all_cursors(
+            |s, sel| {
+                (
+                    TextSelector::previous_word_start_at(&s.text, sel.cursor_offset()),
+                    None,
+                )
+            },
+            None,
+            cx,
+        );
     }
 
     pub(super) fn move_to_next_word(
@@ -387,20 +360,16 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = self.text.clone();
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let new_offset = TextSelector::next_word_start_at(&text, sel.cursor_offset());
-                let mut new_sel = sel.clone();
-                new_sel.place_at(new_offset, None);
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
-        self.finish_move(self.cursor(), None, cx);
+        self.move_all_cursors(
+            |s, sel| {
+                (
+                    TextSelector::next_word_start_at(&s.text, sel.cursor_offset()),
+                    None,
+                )
+            },
+            None,
+            cx,
+        );
     }
 
     /// Add a cursor above each existing cursor.
@@ -503,12 +472,6 @@ impl InputState {
         // Use the column from column_anchor if available, otherwise fall back to current column
         let preferred_column = column_anchor.unwrap_or(point.column);
 
-        // Get the target column, clamping to line length
-        let line = text.slice_line(target_row);
-        let target_column = preferred_column.min(line.len());
-
-        // Calculate offset directly: line_start_offset + column
-        let line_start = text.line_start_offset(target_row);
-        Some(line_start + target_column)
+        Some(offset_at_row_column(text, target_row, preferred_column))
     }
 }

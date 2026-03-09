@@ -28,7 +28,7 @@ use crate::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
 use crate::highlighter::DiagnosticSet;
 use crate::input::blink_cursor::CURSOR_WIDTH;
 use crate::input::change::OperationType;
-use crate::input::movement::MoveDirection;
+use crate::input::movement::{MoveDirection, offset_at_row_column};
 use crate::input::selection::TextSelector;
 use crate::input::{
     CursorId, HoverDefinition, InlineCompletion, Lsp, Position, RopeExt as _, Selection,
@@ -954,44 +954,34 @@ impl InputState {
         }
     }
 
-    pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+    /// Extend all selections using a closure that computes the new offset for each,
+    /// then merge overlapping selections.
+    fn extend_all_selections(
+        &mut self,
+        f: impl Fn(&Self, &Selection) -> usize,
+        cx: &mut Context<Self>,
+    ) {
         self.clear_inline_completion(cx);
-
-        // Extend each selection left by one character boundary
         let new_selections: Vec<Selection> = self
             .selections
             .iter()
             .map(|sel| {
-                let mut new_sel = sel.clone();
-                let new_offset = self.previous_boundary(sel.cursor_offset());
-                Self::extend_selection_to(&mut new_sel, new_offset);
-                new_sel
+                let mut s = sel.clone();
+                Self::extend_selection_to(&mut s, f(self, sel));
+                s
             })
             .collect();
-
         self.selections.replace_all(new_selections);
         self.selections.merge_overlapping();
         cx.notify();
     }
 
+    pub(super) fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+        self.extend_all_selections(|s, sel| s.previous_boundary(sel.cursor_offset()), cx);
+    }
+
     pub(super) fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-        self.clear_inline_completion(cx);
-
-        // Extend each selection right by one character boundary
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let mut new_sel = sel.clone();
-                let new_offset = self.next_boundary(sel.cursor_offset());
-                Self::extend_selection_to(&mut new_sel, new_offset);
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
-        self.selections.merge_overlapping();
-        cx.notify();
+        self.extend_all_selections(|s, sel| s.next_boundary(sel.cursor_offset()), cx);
     }
 
     pub(super) fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
@@ -1030,12 +1020,7 @@ impl InputState {
                         .min(text.lines_len().saturating_sub(1))
                 };
 
-                // Get the target column, clamping to line length if needed
-                let line = text.slice_line(target_row);
-                let target_column = preferred_column.min(line.len());
-
-                let line_start = text.line_start_offset(target_row);
-                let new_offset = line_start + target_column;
+                let new_offset = offset_at_row_column(text, target_row, preferred_column);
 
                 // Extend selection to the new offset
                 let mut new_sel = sel.clone();
@@ -1103,27 +1088,8 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let cursor_offset = sel.cursor_offset();
-                let line_start = self.start_of_line_at(cursor_offset);
-                let mut new_sel = sel.clone();
-                // Update the end (cursor position) to line start, then normalize
-                new_sel.end = line_start;
-                // Normalize so start <= end
-                if new_sel.end < new_sel.start {
-                    new_sel.reversed = !new_sel.reversed;
-                    std::mem::swap(&mut new_sel.start, &mut new_sel.end);
-                }
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
+        self.extend_all_selections(|s, sel| s.start_of_line_at(sel.cursor_offset()), cx);
         self.pause_blink_cursor(cx);
-        cx.notify();
     }
 
     pub(super) fn select_to_end_of_line(
@@ -1132,38 +1098,21 @@ impl InputState {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = self.text.clone();
-        let new_selections: Vec<Selection> = self
-            .selections
-            .iter()
-            .map(|sel| {
-                let cursor_offset = sel.cursor_offset();
-                let mut line_end = self.end_of_line_at(cursor_offset);
-                // line_end_offset returns the position after the line content.
-                // For a line ending with \n, it returns the position after \n.
-                // We need to move back to the last character before the \n.
+        self.extend_all_selections(
+            |s, sel| {
+                let mut line_end = s.end_of_line_at(sel.cursor_offset());
                 if line_end > 0 {
-                    if let Some(ch) = text.char_at(line_end) {
+                    if let Some(ch) = s.text.char_at(line_end) {
                         if ch == '\n' || ch == '\r' {
                             line_end = line_end.saturating_sub(1);
                         }
                     }
                 }
-                let mut new_sel = sel.clone();
-                // Update the end (cursor position) to line end, then normalize
-                new_sel.end = line_end;
-                // Normalize so start <= end
-                if new_sel.end < new_sel.start {
-                    new_sel.reversed = !new_sel.reversed;
-                    std::mem::swap(&mut new_sel.start, &mut new_sel.end);
-                }
-                new_sel
-            })
-            .collect();
-
-        self.selections.replace_all(new_selections);
+                line_end
+            },
+            cx,
+        );
         self.pause_blink_cursor(cx);
-        cx.notify();
     }
 
     pub(super) fn select_to_previous_word(
@@ -1300,37 +1249,32 @@ impl InputState {
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        self.selections_before_edit = Some(self.selections.iter().cloned().collect());
-        let mut any_changed = false;
-        let mut new_selections = Vec::new();
-        for selection in self.selections.iter() {
-            if selection.is_collapsed() {
-                let prev = self.previous_boundary(selection.start);
-                if prev != selection.start {
-                    new_selections.push(Selection::new(selection.id, prev, selection.start));
-                    any_changed = true;
-                } else {
-                    new_selections.push(selection.clone());
-                }
-            } else {
-                new_selections.push(selection.clone());
-            }
-        }
-        if any_changed {
-            self.selections.replace_all(new_selections);
-        }
-        self.replace_text_in_range(None, "", window, cx);
+        self.delete_char(true, window, cx);
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        self.delete_char(false, window, cx);
+    }
+
+    /// Shared implementation for backspace (backward) and delete (forward).
+    fn delete_char(&mut self, backward: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.selections_before_edit = Some(self.selections.iter().cloned().collect());
         let mut any_changed = false;
         let mut new_selections = Vec::new();
         for selection in self.selections.iter() {
             if selection.is_collapsed() {
-                let next = self.next_boundary(selection.start);
-                if next != selection.start {
-                    new_selections.push(Selection::new(selection.id, selection.start, next));
+                let boundary = if backward {
+                    self.previous_boundary(selection.start)
+                } else {
+                    self.next_boundary(selection.start)
+                };
+                if boundary != selection.start {
+                    let (start, end) = if backward {
+                        (boundary, selection.start)
+                    } else {
+                        (selection.start, boundary)
+                    };
+                    new_selections.push(Selection::new(selection.id, start, end));
                     any_changed = true;
                 } else {
                     new_selections.push(selection.clone());
@@ -2001,6 +1945,21 @@ impl InputState {
         }
     }
 
+    /// Common post-edit UI updates shared by undo, redo, and similar operations.
+    fn finish_text_edit(&mut self, cx: &mut Context<Self>) {
+        self.display_map
+            .on_text_changed(&self.text, &(0..self.text.len()), &self.text, cx);
+        self.mode.update_highlighter(None, &self.text, true, cx);
+        self.update_fold_candidates();
+        if let Some(diagnostics) = self.mode.diagnostics_mut() {
+            diagnostics.reset(&self.text)
+        }
+        self.update_preferred_column();
+        self.update_search(cx);
+        cx.emit(InputEvent::Change);
+        cx.notify();
+    }
+
     pub(super) fn undo(&mut self, _: &Undo, _window: &mut Window, cx: &mut Context<Self>) {
         self.history.ignore = true;
         if let Some(changes) = self.history.undo() {
@@ -2058,18 +2017,7 @@ impl InputState {
             // Re-enable cursor movement after undo is complete
             self.skip_set_cursor = false;
 
-            self.display_map
-                .on_text_changed(&self.text, &(0..self.text.len()), &self.text, cx);
-            // Re-parse syntax highlighting from scratch after undo
-            self.mode.update_highlighter(None, &self.text, true, cx);
-            self.update_fold_candidates();
-            if let Some(diagnostics) = self.mode.diagnostics_mut() {
-                diagnostics.reset(&self.text)
-            }
-            self.update_preferred_column();
-            self.update_search(cx);
-            cx.emit(InputEvent::Change);
-            cx.notify();
+            self.finish_text_edit(cx);
         }
         self.last_operation_type = None;
         self.history.ignore = false;
@@ -2166,19 +2114,7 @@ impl InputState {
             // Re-enable cursor movement after redo is complete
             self.skip_set_cursor = false;
 
-            // Final UI update
-            self.display_map
-                .on_text_changed(&self.text, &(0..self.text.len()), &self.text, cx);
-            // Re-parse syntax highlighting from scratch after redo
-            self.mode.update_highlighter(None, &self.text, true, cx);
-            self.update_fold_candidates();
-            if let Some(diagnostics) = self.mode.diagnostics_mut() {
-                diagnostics.reset(&self.text)
-            }
-            self.update_preferred_column();
-            self.update_search(cx);
-            cx.emit(InputEvent::Change);
-            cx.notify();
+            self.finish_text_edit(cx);
 
             // Restore the last operation type from the changes we just redone
             self.last_operation_type = last_op_type;
@@ -3231,9 +3167,12 @@ mod tests {
                 state.mode = state.mode.clone().multi_line(true);
                 state.text = Rope::from_str(&full_text);
                 state.display_map.set_text(&state.text, cx);
-                state
-                    .display_map
-                    .on_text_changed(&state.text, &(0..state.text.len()), &state.text, cx);
+                state.display_map.on_text_changed(
+                    &state.text,
+                    &(0..state.text.len()),
+                    &state.text,
+                    cx,
+                );
                 state.last_layout = None;
 
                 let mut selections = Vec::new();
@@ -3782,9 +3721,12 @@ mod tests {
                 state.mode = state.mode.clone().multi_line(true);
                 state.text = Rope::from_str("line1\nline2\nline3");
                 state.display_map.set_text(&state.text, cx);
-                state
-                    .display_map
-                    .on_text_changed(&state.text, &(0..state.text.len()), &state.text, cx);
+                state.display_map.on_text_changed(
+                    &state.text,
+                    &(0..state.text.len()),
+                    &state.text,
+                    cx,
+                );
                 state.last_layout = None;
 
                 // Create a selection from start of line 1 to end of line 3
