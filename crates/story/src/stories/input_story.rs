@@ -368,6 +368,7 @@ impl InputStory {
             }
             InputEvent::Focus => println!("Focus"),
             InputEvent::Blur => println!("Blur"),
+            _ => {}
         };
     }
 }
