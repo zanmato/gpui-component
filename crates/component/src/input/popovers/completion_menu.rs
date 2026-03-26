@@ -459,7 +459,7 @@ impl Render for CompletionMenu {
                             .pb_0p5()
                             .test_support()
                             .max_w(max_width)
-                            .min_w(px(120.))
+                            .min_w(px(180.))
                             .child(List::new(&list).max_h(MAX_MENU_HEIGHT)),
                     )
                     .when_some(selected_documentation, |this, documentation| {

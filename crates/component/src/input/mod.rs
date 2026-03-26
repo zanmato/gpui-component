@@ -40,7 +40,7 @@ pub use gpui_base::input::{
     OverviewRulerDecorationCollection, OverviewRulerLane, Paste, Point, PrepaintCaretGeometry,
     RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Redo, Replace, Rope, RopeExt,
     RopeLines, Search, SelectAll, SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd,
-    SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection, ShowCharacterPalette,
+    SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection, SelectionRangeProvider, ShowCharacterPalette,
     ShowCompletions, ShowDocumentHandler, TabSize, TextDecoration, TextDecorationCollection,
     TextareaState, ToggleCodeActions, Undo, WrappingIndent, highlight_characters,
     highlight_contains, highlight_prefix,

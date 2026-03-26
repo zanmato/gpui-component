@@ -191,7 +191,7 @@ impl<M: InputModeKind> InputBaseState<M> {
                 if !pressed_word {
                     // Whitespace or an empty field: the press places the caret,
                     // and the menu offers Paste and Select All.
-                    self.move_to_with_affinity(offset, None, line_end_affinity, cx);
+                    self.move_to_with_affinity(offset, None, line_end_affinity, window, cx);
                     self.selected_word_range = None;
                 }
                 self.selecting = true;
@@ -206,7 +206,7 @@ impl<M: InputModeKind> InputBaseState<M> {
                     self.select_to_with_affinity(offset, line_end_affinity, cx);
                 } else {
                     // The press placed the caret; the sweep carries it.
-                    self.move_to_with_affinity(offset, None, line_end_affinity, cx);
+                    self.move_to_with_affinity(offset, None, line_end_affinity, window, cx);
                 }
                 self.retain_touch_selection();
                 true
