@@ -326,7 +326,7 @@ mod tests {
                 state.replace_text_in_range(None, "«", window, cx);
                 assert_eq!(state.text().to_string(), "«»");
                 state.set_value("if enabled:", window, cx);
-                state.set_selected_range(11..11, cx);
+                state.set_selected_range(11..11, window, cx);
                 state.set_highlighter("python", cx);
                 state.focus(window, cx);
             });
