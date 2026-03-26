@@ -34,7 +34,7 @@ pub use gpui_base::input::{
     MoveUp, Outdent, OutdentInline, Paste, Point, RangeDecoration, RangeDecorationCollection,
     RangeDecorationStyle, Redo, Replace, Rope, RopeExt, RopeLines, Search, SelectAll, SelectToEnd,
     SelectToEndOfLine, SelectToNextWordEnd, SelectToPreviousWordStart, SelectToStart,
-    SelectToStartOfLine, Selection, ShowCharacterPalette, ShowDocumentHandler, TabSize,
+    SelectToStartOfLine, Selection, SelectionRangeProvider, ShowCharacterPalette, ShowDocumentHandler, TabSize,
     TextDecoration, TextDecorationCollection, TextareaState, ToggleCodeActions, Undo,
     WrappingIndent,
 };

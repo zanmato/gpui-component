@@ -468,7 +468,7 @@ mod tests {
         cx.update(|window, cx| {
             state.update(cx, |state, cx| {
                 state.set_value("foo bar foo", window, cx);
-                state.set_selected_range(0..3, cx);
+                state.set_selected_range(0..3, window, cx);
                 state.open_search(false, cx);
             });
 
@@ -621,7 +621,7 @@ mod tests {
             assert!(state.read(cx).has_overlay_action_handler());
             state.update(cx, |state, cx| {
                 state.set_value("foo bar foo", window, cx);
-                state.set_selected_range(4..7, cx);
+                state.set_selected_range(4..7, window, cx);
                 state.open_search(true, cx);
                 assert_eq!(state.search_session().query, "bar");
                 assert!(state.search_session().replace_mode);
