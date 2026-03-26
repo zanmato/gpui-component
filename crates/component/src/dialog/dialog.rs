@@ -683,7 +683,7 @@ impl RenderOnce for Dialog {
                                         .child(
                                             v_flex()
                                                 .flex_1()
-                                                .overflow_hidden()
+                                                .min_h_0()
                                                 .gap_y_2()
                                                 .when_some(self.header, |this, header| {
                                                     this.child(
@@ -720,6 +720,7 @@ impl RenderOnce for Dialog {
                                                                 .overflow_y_scrollbar()
                                                                 .pl(paddings.left)
                                                                 .pr(paddings.right)
+                                                                .pb(paddings.bottom)
                                                                 .children(self.children),
                                                         ),
                                                     )

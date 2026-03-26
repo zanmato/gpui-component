@@ -1968,6 +1968,7 @@ impl CodeBlock {
             .w_full()
             .min_w_0()
             .p_3()
+            .my_3()
             .bg(style.code_background())
             .font_family(cx.theme().tokens.typography.mono.clone())
             .text_size(cx.theme().tokens.typography.mono_md.size)

@@ -84,6 +84,20 @@ impl DisplayMap {
         self.wrap_map.wrap_row_to_buffer_line(wrap_row)
     }
 
+    /// Convert wrap row to buffer line.
+    /// This is useful for estimating buffer line from scroll offset (in wrap rows).
+    #[inline]
+    pub fn wrap_row_to_buffer_line(&self, wrap_row: usize) -> usize {
+        self.wrap_map.wrap_row_to_buffer_line(wrap_row)
+    }
+
+    /// Get the first wrap row for a given buffer line.
+    /// Useful for calculating pixel offset of a buffer line.
+    #[inline]
+    pub fn buffer_line_to_first_wrap_row(&self, line: usize) -> usize {
+        self.wrap_map.buffer_line_to_first_wrap_row(line)
+    }
+
     /// Get the display row range for a buffer line: [start, end)
     /// Returns None if the buffer line is completely hidden
     pub fn buffer_line_to_display_row_range(&self, line: usize) -> Option<Range<usize>> {
