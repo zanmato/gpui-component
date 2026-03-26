@@ -62,9 +62,10 @@ impl<M: InputModeKind> InputBaseState<M> {
         &mut self,
         offset: usize,
         direction: Option<MoveDirection>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.move_to_with_affinity(offset, direction, false, cx);
+        self.move_to_with_affinity(offset, direction, false, window, cx);
     }
 
     /// Like [`Self::move_to`], but also carries the caret's line-end affinity.
@@ -79,6 +80,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         offset: usize,
         direction: Option<MoveDirection>,
         line_end_affinity: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.undo_manager.break_transaction_coalescing();
@@ -91,6 +93,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.update_preferred_column();
         M::hide_context_menu(self, cx);
         M::clear_inline_completion(self, cx);
+        M::on_selection_ranges(self, offset, window, cx);
         cx.notify()
     }
 
@@ -180,7 +183,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         &mut self,
         f: impl Fn(&Self, &CursorSelection) -> (usize, Option<(Pixels, usize)>, bool),
         direction: Option<MoveDirection>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.undo_manager.break_transaction_coalescing();
@@ -203,10 +206,12 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.selections.merge_overlapping();
 
         self.cursor_line_end_affinity = active_affinity;
-        self.scroll_to(self.cursor(), direction, cx);
+        let cursor = self.cursor();
+        self.scroll_to(cursor, direction, cx);
         self.pause_blink_cursor(cx);
         M::hide_context_menu(self, cx);
         M::clear_inline_completion(self, cx);
+        M::on_selection_ranges(self, cursor, window, cx);
         cx.notify();
     }
 
@@ -384,14 +389,19 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub(super) fn move_to_start(
         &mut self,
         _: &MoveToStart,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.move_to(0, None, cx);
+        self.move_to(0, None, window, cx);
     }
 
-    pub(super) fn move_to_end(&mut self, _: &MoveToEnd, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_to(self.text.len(), None, cx);
+    pub(super) fn move_to_end(
+        &mut self,
+        _: &MoveToEnd,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_to(self.text.len(), None, window, cx);
     }
 
     pub(super) fn move_to_previous_word(

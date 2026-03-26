@@ -1919,9 +1919,20 @@ impl<M: InputModeKind> Element for TextElement<M> {
             .into_vec()
         };
 
-        let document_colors = state
+        let mut document_colors = state
             .extras
             .document_color_swatches(&text, &last_layout.visible_range);
+
+        let selection_range = state.extras.selection_range_swatch(
+            &text,
+            &last_layout.visible_range,
+            state.editor_style.editor_active_line,
+        );
+
+        // Also add selection range to document_colors for background rendering
+        if let Some(sr) = selection_range {
+            document_colors.push(sr);
+        }
 
         // Create shaped lines for whitespace indicators before layout
         let whitespace_indicators =
@@ -2672,7 +2683,7 @@ fn split_runs_by_bg_segments(
             // Add the overlapping part with background color
             let overlap_start = run_start.max(bg_range.start);
             let overlap_end = run_end.min(bg_range.end);
-            let text_color = if bg_color.l >= 0.5 {
+            let _text_color = if bg_color.l >= 0.5 {
                 gpui::black()
             } else {
                 gpui::white()
@@ -2682,7 +2693,7 @@ fn split_runs_by_bg_segments(
             if run_len > 0 {
                 result.push(TextRun {
                     len: run_len,
-                    color: text_color,
+                    background_color: Some(*bg_color),
                     ..run.clone()
                 });
 
@@ -3140,18 +3151,21 @@ mod tests {
             },
         ];
 
+        // Background segments are rendered by setting `background_color` on the
+        // overlapping runs while leaving the foreground `color` untouched.
         let bg_segments = vec![(8..12, gpui::red()), (12..18, gpui::blue())];
         let result = split_runs_by_bg_segments(5, &runs, &bg_segments);
         assert_eq!(
             result.iter().map(|run| run.len).collect::<Vec<_>>(),
             vec![3, 2, 2, 5, 1, 23]
         );
-        assert_eq!(result[0].color, gpui::blue());
-        assert_eq!(result[1].color, gpui::black());
-        assert_eq!(result[2].color, gpui::black());
-        assert_eq!(result[3].color, gpui::black());
-        assert_eq!(result[4].color, gpui::black());
-        assert_eq!(result[5].color, gpui::blue());
+        assert_eq!(result[0].background_color, None);
+        assert_eq!(result[1].background_color, Some(gpui::red()));
+        assert_eq!(result[2].background_color, Some(gpui::red()));
+        assert_eq!(result[3].background_color, Some(gpui::blue()));
+        assert_eq!(result[4].background_color, Some(gpui::blue()));
+        assert_eq!(result[5].background_color, None);
+        assert!(result.iter().all(|run| run.color == gpui::blue()));
     }
 
     #[test]

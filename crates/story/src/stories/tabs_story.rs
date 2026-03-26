@@ -164,9 +164,9 @@ impl Render for TabsStory {
                         .menu(self.menu)
                         .when_some(max_width, |this, max_width| this.max_width(max_width))
                         .selected_index(self.active_tab_ix)
-                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                            this.set_active_tab(*ix, window, cx);
-                        }))
+                        //.on_click(cx.listener(|this, ix: &usize, window, cx| {
+                        //    this.set_active_tab(*ix, window, cx);
+                        //}))
                         .border_t_1()
                         .border_color(cx.theme().border)
                         .prefix(
@@ -215,9 +215,9 @@ impl Render for TabsStory {
                         .menu(self.menu)
                         .when_some(max_width, |this, max_width| this.max_width(max_width))
                         .selected_index(self.active_tab_ix)
-                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                            this.set_active_tab(*ix, window, cx);
-                        }))
+                        //.on_click(cx.listener(|this, ix: &usize, window, cx| {
+                        //    this.set_active_tab(*ix, window, cx);
+                        //}))
                         .child("Account")
                         .child("Profile")
                         .child("Documents")
@@ -237,9 +237,9 @@ impl Render for TabsStory {
                         .menu(self.menu)
                         .when_some(max_width, |this, max_width| this.max_width(max_width))
                         .selected_index(self.active_tab_ix)
-                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                            this.set_active_tab(*ix, window, cx);
-                        }))
+                        //.on_click(cx.listener(|this, ix: &usize, window, cx| {
+                        //    this.set_active_tab(*ix, window, cx);
+                        //}))
                         .child(Tab::new().label("Account"))
                         .child(Tab::new().label("Profile").disabled(true))
                         .child(Tab::new().label("Documents & Files"))
@@ -259,9 +259,9 @@ impl Render for TabsStory {
                         .menu(self.menu)
                         .when_some(max_width, |this, max_width| this.max_width(max_width))
                         .selected_index(self.active_tab_ix)
-                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                            this.set_active_tab(*ix, window, cx);
-                        }))
+                        //.on_click(cx.listener(|this, ix: &usize, window, cx| {
+                        //    this.set_active_tab(*ix, window, cx);
+                        //}))
                         .child(Tab::new().label("Account"))
                         .child(Tab::new().label("Profile").disabled(true))
                         .child(Tab::new().label("Documents & Files"))
@@ -281,9 +281,9 @@ impl Render for TabsStory {
                         .menu(self.menu)
                         .when_some(max_width, |this, max_width| this.max_width(max_width))
                         .selected_index(self.active_tab_ix)
-                        .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                            this.set_active_tab(*ix, window, cx);
-                        }))
+                        //.on_click(cx.listener(|this, ix: &usize, window, cx| {
+                        //    this.set_active_tab(*ix, window, cx);
+                        //}))
                         .child(IconName::Bot)
                         .child(IconName::Calendar)
                         .child(IconName::Map)
@@ -350,9 +350,9 @@ impl Render for TabsStory {
                             .with_size(self.size)
                             .when_some(max_width, |this, max_width| this.max_width(max_width))
                             .selected_index(self.active_tab_ix)
-                            .on_click(cx.listener(|this, ix: &usize, window, cx| {
-                                this.set_active_tab(*ix, window, cx);
-                            }))
+                            //.on_click(cx.listener(|this, ix: &usize, window, cx| {
+                            //    this.set_active_tab(*ix, window, cx);
+                            //}))
                             .child(Tab::new().flex_1().label("About"))
                             .child(Tab::new().flex_1().label("Profile")),
                     ),

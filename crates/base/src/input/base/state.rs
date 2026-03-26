@@ -124,6 +124,7 @@ pub enum InputEvent {
     PressEnter { secondary: bool, shift: bool },
     Focus,
     Blur,
+    SelectionRangeChange { range: lsp_types::Range },
 }
 
 pub(super) const CONTEXT: &str = "Input";
@@ -1214,7 +1215,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         let position: Position = position.into();
         let offset = self.text.position_to_offset(&position);
 
-        self.move_to(offset, None, cx);
+        self.move_to(offset, None, window, cx);
         self.update_preferred_column();
         self.focus(window, cx);
     }
@@ -1779,7 +1780,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
 
         if !self.active_selection().contains(offset) {
-            self.move_to(offset, None, cx);
+            self.move_to(offset, None, window, cx);
         }
 
         if self.is_code_editor() {
@@ -1994,7 +1995,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         if event.button == MouseButton::Right {
             if self.enable_context_menu {
                 if !self.active_selection().contains(offset) {
-                    self.move_to(offset, None, cx);
+                    self.move_to(offset, None, window, cx);
                 }
                 self.pending_context_menu = Some((event.position, offset));
             }
@@ -2010,7 +2011,7 @@ impl<M: InputModeKind> InputBaseState<M> {
                 // Mark selecting so the drag handler extends the block.
                 self.column_select_start = Some(offset);
                 self.selecting = true;
-                self.move_to_with_affinity(offset, None, line_end_affinity, cx);
+                self.move_to_with_affinity(offset, None, line_end_affinity, window, cx);
                 return;
             } else if event.modifiers.alt {
                 self.add_cursor_at(offset, cx);
@@ -2024,7 +2025,12 @@ impl<M: InputModeKind> InputBaseState<M> {
         if event.modifiers.shift {
             self.select_to_with_affinity(offset, line_end_affinity, cx);
         } else {
-            self.move_to_with_affinity(offset, None, line_end_affinity, cx)
+            // A plain click is not a drag yet. Clear `selecting` so the move can
+            // request the selection ranges, then arm it again for a drag that
+            // may follow.
+            self.selecting = false;
+            self.move_to_with_affinity(offset, None, line_end_affinity, window, cx);
+            self.selecting = true;
         }
     }
 
@@ -2199,7 +2205,13 @@ impl<M: InputModeKind> InputBaseState<M> {
                 row_offset_y += pos.y;
                 if col_offset_x - safety_margin < -scroll_offset.x {
                     // If the position is out of the visible area, scroll to make it visible
-                    scroll_offset.x = -col_offset_x + safety_margin;
+                    // scroll_offset.x = -col_offset_x + RIGHT_MARGIN;
+
+                    scroll_offset.x = if self.is_multi_line() {
+                        -col_offset_x + safety_margin
+                    } else {
+                        -col_offset_x
+                    };
                 } else if col_offset_x + safety_margin > -scroll_offset.x + bounds_width {
                     scroll_offset.x = -(col_offset_x - bounds_width + safety_margin);
                 }
@@ -2541,7 +2553,12 @@ impl<M: InputModeKind> InputBaseState<M> {
     ///
     /// Non-empty ranges expand to character boundaries. Empty ranges remain empty and are
     /// clipped to the preceding character boundary.
-    pub fn set_selected_range(&mut self, range: Range<usize>, cx: &mut Context<Self>) {
+    pub fn set_selected_range(
+        &mut self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let end_bias = if range.start == range.end {
             Bias::Left
         } else {
@@ -2550,7 +2567,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         let start = self.text.clip_offset(range.start, Bias::Left);
         let end = self.text.clip_offset(range.end, end_bias);
 
-        self.move_to(start, None, cx);
+        self.move_to(start, None, window, cx);
         self.active_selection_mut().reversed = false;
         self.selected_word_range = None;
         self.select_to(end, cx);
@@ -2695,6 +2712,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         cx: &mut Context<Self>,
     ) {
         M::clear_inline_completion(self, cx);
+        self.extras.clear_selection_range();
 
         self.cursor_line_end_affinity = line_end_affinity;
         let offset = offset.clamp(0, self.text.len());
@@ -3535,6 +3553,9 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         if !self.silent_replace_text {
             M::on_text_typed(self, &range, &new_text, window, cx);
         }
+        let cursor = self.cursor();
+        M::on_selection_ranges(self, cursor, window, cx);
+
         if self.emit_events {
             cx.emit(InputEvent::Change);
         }
@@ -3984,6 +4005,257 @@ mod tests {
     }
 
     #[gpui::test]
+    fn test_selection_range_byte_calculation(_cx: &mut TestAppContext) {
+        use crate::input::RopeExt;
+
+        // Create a simple rope to test byte range calculations
+        let text = Rope::from("SELECT *\nFROM table\nWHERE id = 1");
+
+        eprintln!("Text: {:?}", text.to_string());
+        eprintln!("Text len: {}", text.len());
+        eprintln!("Lines len: {}", text.lines_len());
+
+        for i in 0..text.lines_len() {
+            let start = text.line_start_offset(i);
+            let end = text.line_end_offset(i);
+            let next_line_start = if i + 1 < text.lines_len() {
+                text.line_start_offset(i + 1)
+            } else {
+                text.len()
+            };
+            eprintln!(
+                "Line {}: start={}, end={}, next_start={}, text={:?}",
+                i,
+                start,
+                end,
+                next_line_start,
+                text.slice(start..end).to_string()
+            );
+        }
+
+        // Simulate cursor on line 1 (FROM table)
+        let cursor_offset = text.line_start_offset(1) + 1; // After "F"
+        let current_row = text.offset_to_point(cursor_offset).row;
+
+        eprintln!("\nCursor offset: {}", cursor_offset);
+        eprintln!("Current row: {}", current_row);
+
+        // Calculate current line byte range (as done in element.rs)
+        let current_line_start = text.line_start_offset(current_row);
+        let current_line_end = if current_row + 1 < text.lines_len() {
+            text.line_start_offset(current_row + 1)
+        } else {
+            text.len()
+        };
+
+        eprintln!(
+            "Current line byte range: {}..{}",
+            current_line_start, current_line_end
+        );
+        eprintln!(
+            "Current line text: {:?}",
+            text.slice(current_line_start..current_line_end).to_string()
+        );
+
+        // Simulate selection range spanning all lines
+        let selection_start = text.line_start_offset(0);
+        let selection_end = text.len();
+        let selection_range = selection_start..selection_end;
+
+        eprintln!("\nSelection range: {}..{}", selection_start, selection_end);
+
+        // Check if selection range overlaps with current line
+        let overlaps =
+            selection_range.start < current_line_end && selection_range.end > current_line_start;
+        eprintln!("Selection overlaps with current line: {}", overlaps);
+
+        if overlaps {
+            // Before part
+            if selection_range.start < current_line_start {
+                let before = selection_range.start..current_line_start;
+                eprintln!(
+                    "Before part: {}..{} = {:?}",
+                    before.start,
+                    before.end,
+                    text.slice(before.clone()).to_string()
+                );
+            }
+            // After part
+            if selection_range.end > current_line_end {
+                let after = current_line_end..selection_range.end;
+                eprintln!(
+                    "After part: {}..{} = {:?}",
+                    after.start,
+                    after.end,
+                    text.slice(after.clone()).to_string()
+                );
+            }
+        }
+
+        // Test when cursor is on the last line
+        eprintln!("\n--- Cursor on last line ---");
+        let cursor_offset_last = text.line_start_offset(2) + 1; // After "W"
+        let current_row_last = text.offset_to_point(cursor_offset_last).row;
+        eprintln!("Cursor offset: {}", cursor_offset_last);
+        eprintln!("Current row: {}", current_row_last);
+
+        let current_line_start_last = text.line_start_offset(current_row_last);
+        let current_line_end_last = if current_row_last + 1 < text.lines_len() {
+            text.line_start_offset(current_row_last + 1)
+        } else {
+            text.len()
+        };
+
+        eprintln!(
+            "Current line byte range: {}..{}",
+            current_line_start_last, current_line_end_last
+        );
+        eprintln!(
+            "Current line text: {:?}",
+            text.slice(current_line_start_last..current_line_end_last)
+                .to_string()
+        );
+
+        // Check overlap for last line
+        let overlaps_last = selection_range.start < current_line_end_last
+            && selection_range.end > current_line_start_last;
+        eprintln!("Selection overlaps with current line: {}", overlaps_last);
+
+        if overlaps_last {
+            // Before part only (no after part for last line)
+            if selection_range.start < current_line_start_last {
+                let before = selection_range.start..current_line_start_last;
+                eprintln!(
+                    "Before part: {}..{} = {:?}",
+                    before.start,
+                    before.end,
+                    text.slice(before.clone()).to_string()
+                );
+            }
+            if selection_range.end > current_line_end_last {
+                let after = current_line_end_last..selection_range.end;
+                eprintln!(
+                    "After part: {}..{} = {:?}",
+                    after.start,
+                    after.end,
+                    text.slice(after.clone()).to_string()
+                );
+            }
+        }
+    }
+
+    /// Double- and triple-click selection must drop the LSP selection range
+    /// highlight.
+    #[gpui::test]
+    fn test_mouse_word_and_line_selection_clear_selection_range(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        let range = lsp_types::Range {
+            start: lsp_types::Position {
+                line: 0,
+                character: 0,
+            },
+            end: lsp_types::Position {
+                line: 2,
+                character: 0,
+            },
+        };
+
+        for (name, select) in [
+            (
+                "select_word",
+                (|s: &mut InputBaseState<EditorMode>,
+                  window: &mut Window,
+                  cx: &mut Context<InputBaseState<EditorMode>>| {
+                    s.select_word(4, window, cx)
+                })
+                    as fn(
+                        &mut InputBaseState<EditorMode>,
+                        &mut Window,
+                        &mut Context<InputBaseState<EditorMode>>,
+                    ),
+            ),
+            ("select_line", |s, window, cx| s.select_line(4, window, cx)),
+        ] {
+            cx.update(|window, cx| {
+                input.update(cx, |state, cx| {
+                    state.set_value("aaa\nbbb\nccc", window, cx);
+                    state.extras.lsp.set_selection_range(range);
+                    assert!(
+                        state.extras.lsp.has_selection_range(),
+                        "{name}: precondition"
+                    );
+                    select(state, window, cx);
+                });
+            });
+
+            input.read_with(&cx, |state, _| {
+                assert!(
+                    !state.extras.lsp.has_selection_range(),
+                    "{name} must clear the LSP selection range highlight"
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn test_selection_range_with_rendering(cx: &mut TestAppContext) {
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        // Set up multi-line SQL text
+        let text = "SELECT *\nFROM table\nWHERE id = 1";
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value(text, window, cx);
+            });
+        });
+
+        // Set up a selection range that spans all lines
+        cx.update(|_, cx| {
+            input.update(cx, |state, _cx| {
+                state.extras.lsp.set_selection_range(lsp_types::Range {
+                    start: lsp_types::Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: lsp_types::Position {
+                        line: 2,
+                        character: 12,
+                    },
+                });
+            });
+        });
+
+        // Move cursor to line 1 (FROM table)
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_cursor_position(Position::new(1, 1), window, cx);
+            });
+        });
+
+        // Run background tasks
+        cx.run_until_parked();
+
+        // Check the state
+        cx.update(|_, cx| {
+            input.read_with(cx, |state, _| {
+                eprintln!("\n=== Final State ===");
+                eprintln!("Text: {:?}", state.text.to_string());
+                eprintln!("Cursor: {}", state.cursor());
+                eprintln!(
+                    "Selection range set: {}",
+                    state.extras.lsp.has_selection_range()
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
     fn context_menu_handler_is_deferred_and_respects_disabled(cx: &mut TestAppContext) {
         use std::{cell::Cell, rc::Rc};
         cx.update(crate::init);
@@ -4118,10 +4390,10 @@ mod tests {
         // `Down` keystroke at EOB. `scroll_to` runs synchronously inside
         // `move_to`; inspect `deferred_scroll_offset` in the same closure
         // before the next paint consumes and clears it.
-        cx.update(|_, cx| {
+        cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 let end = state.text.len();
-                state.move_to(end, Some(MoveDirection::Down), cx);
+                state.move_to(end, Some(MoveDirection::Down), window, cx);
 
                 let deferred = state
                     .deferred_scroll_offset
@@ -4452,7 +4724,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value("abcd", window, cx);
-                state.set_selected_range(2..2, cx);
+                state.set_selected_range(2..2, window, cx);
                 state.backspace(&Backspace, window, cx);
                 state.delete(&Delete, window, cx);
                 assert_eq!(state.value(), "ad");
@@ -4482,7 +4754,7 @@ mod tests {
                 assert_eq!(state.selected_range(), 4..4);
 
                 state.set_value("abcd", window, cx);
-                state.set_selected_range(1..1, cx);
+                state.set_selected_range(1..1, window, cx);
                 state.delete(&Delete, window, cx);
                 state.delete(&Delete, window, cx);
                 assert_eq!(state.value(), "ad");
@@ -4825,7 +5097,7 @@ mod tests {
             input.update(cx, |state, cx| {
                 state.set_value("aaa bbb ccc", window, cx);
                 state.set_masked(true, window, cx);
-                state.set_selected_range(7..7, cx);
+                state.set_selected_range(7..7, window, cx);
 
                 // The mask hides word boundaries, so a word delete takes
                 // everything before the caret and leaves the rest.
@@ -4844,7 +5116,7 @@ mod tests {
                 // Unmasked, the same delete only takes one word.
                 state.set_masked(false, window, cx);
                 state.set_value("aaa bbb ccc", window, cx);
-                state.set_selected_range(11..11, cx);
+                state.set_selected_range(11..11, window, cx);
                 state.delete_previous_word(&DeleteToPreviousWordStart, window, cx);
                 assert_eq!(state.value(), "aaa bbb ");
 
@@ -4887,7 +5159,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(None, "alpha beta gamma", window, cx);
-                state.set_selected_range(6..10, cx);
+                state.set_selected_range(6..10, window, cx);
                 state.cut(&Cut, window, cx);
                 assert_eq!(state.value(), "alpha  gamma");
 
@@ -4914,7 +5186,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value("one two three\nfour five", window, cx);
-                state.set_selected_range(13..13, cx);
+                state.set_selected_range(13..13, window, cx);
                 state.delete_previous_word(&DeleteToPreviousWordStart, window, cx);
                 assert_eq!(state.value(), "one two \nfour five");
                 state.delete_to_end_of_line(&DeleteToEndOfLine, window, cx);
@@ -4937,7 +5209,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(None, "before", window, cx);
-                state.set_selected_range(0..6, cx);
+                state.set_selected_range(0..6, window, cx);
                 state.replace_text_in_range(None, "line one\nline two\n第三行", window, cx);
                 assert_eq!(state.value(), "line one\nline two\n第三行");
 
@@ -4985,7 +5257,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(None, "abc", window, cx);
-                state.set_selected_range(1..2, cx);
+                state.set_selected_range(1..2, window, cx);
                 state.replace_text_in_range(None, "X", window, cx);
                 state.replace_text_in_range(None, "z", window, cx);
                 assert_eq!(state.value(), "aXzc");
@@ -5299,17 +5571,17 @@ mod tests {
         let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
         let input = input_view.input;
 
-        cx.update(|_, cx| {
+        cx.update(|window, cx| {
             input.update(cx, |s, cx| {
-                s.set_selected_range(0..5, cx);
+                s.set_selected_range(0..5, window, cx);
                 assert_eq!(s.selected_range(), 0..5);
                 assert_eq!(s.selected_text().to_string(), "hello");
 
-                s.set_selected_range(6..11, cx);
+                s.set_selected_range(6..11, window, cx);
                 assert_eq!(s.selected_text().to_string(), "world");
 
                 // clamped + collapsed
-                s.set_selected_range(100..100, cx);
+                s.set_selected_range(100..100, window, cx);
                 assert_eq!(s.selected_range(), 11..11);
             });
         });
@@ -5459,11 +5731,11 @@ mod tests {
 
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
-                state.set_selected_range(0..1, cx);
+                state.set_selected_range(0..1, window, cx);
                 assert_eq!(state.selected_range(), 0..2);
                 state.copy(&Copy, window, cx);
 
-                state.set_selected_range(1..1, cx);
+                state.set_selected_range(1..1, window, cx);
                 assert_eq!(state.selected_range(), 0..0);
             });
         });
@@ -5477,7 +5749,7 @@ mod tests {
 
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
-                state.set_selected_range(7..7, cx);
+                state.set_selected_range(7..7, window, cx);
                 state.replace_and_mark_text_in_range(None, "s", Some(1..1), window, cx);
                 state.replace_and_mark_text_in_range(None, "sh", Some(2..2), window, cx);
 
@@ -5600,7 +5872,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value("abc", window, cx);
-                state.set_selected_range(1..2, cx);
+                state.set_selected_range(1..2, window, cx);
                 state.replace_text_in_range(None, "X", window, cx);
 
                 state.undo(&Undo, window, cx);
@@ -5623,7 +5895,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value("abc", window, cx);
-                state.set_selected_range(1..1, cx);
+                state.set_selected_range(1..1, window, cx);
                 state.delete(&Delete, window, cx);
 
                 state.undo(&Undo, window, cx);
@@ -5643,7 +5915,7 @@ mod tests {
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(None, "ab", window, cx);
                 state.undo(&Undo, window, cx);
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 state.redo(&Redo, window, cx);
                 assert_eq!(state.value(), "ab");
 
@@ -5664,7 +5936,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.replace_text_in_range(None, "a", window, cx);
-                state.move_to(0, None, cx);
+                state.move_to(0, None, window, cx);
                 state.replace_text_in_range(None, "", window, cx);
                 state.undo(&Undo, window, cx);
                 assert_eq!(state.value(), "");
@@ -5733,7 +6005,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value("12345", window, cx);
-                state.set_selected_range(2..2, cx);
+                state.set_selected_range(2..2, window, cx);
                 state.replace_text_in_range(None, "9", window, cx);
                 let selection_after_edit = state.selected_range();
                 assert_ne!(selection_after_edit.end, state.value().len());
@@ -6341,7 +6613,7 @@ mod tests {
                 let line = state.display_map.line(0).unwrap();
                 assert!(line.wrapped_lines.len() > 1);
                 let boundary = line.wrapped_lines[0].end;
-                state.move_to_with_affinity(boundary, None, true, cx);
+                state.move_to_with_affinity(boundary, None, true, window, cx);
                 state.select_to_end_of_line(&SelectToEndOfLine, window, cx);
                 assert_eq!(state.selected_range(), boundary..state.text.len());
             });
@@ -6394,7 +6666,7 @@ mod tests {
                     )],
                     cx,
                 );
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 state.replace_text_in_range(None, "X", window, cx);
                 let layers = state.extras.decoration_layers();
                 assert_eq!(layers.into_iter().flatten().next().unwrap().range, 5..8);
@@ -6438,7 +6710,7 @@ mod tests {
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| {
                 state.set_value("abc", window, cx);
-                state.set_selected_range(1..2, cx);
+                state.set_selected_range(1..2, window, cx);
                 state.replace_and_mark_text_in_range(None, "ni", None, window, cx);
                 state.replace_text_in_range(None, "你", window, cx);
                 state.undo(&Undo, window, cx);
@@ -6457,9 +6729,9 @@ mod tests {
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| {
                 state.set_value("abc", window, cx);
-                state.set_selected_range(1..1, cx);
+                state.set_selected_range(1..1, window, cx);
                 state.replace_text_in_range(None, "X", window, cx);
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 state.replace_text_in_range(None, "", window, cx);
                 state.undo(&Undo, window, cx);
                 state.redo(&Redo, window, cx);

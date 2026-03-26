@@ -132,6 +132,15 @@ impl InputModeKind for EditorMode {
         state.handle_hover_definition(offset, window, cx);
     }
 
+    fn on_selection_ranges(
+        state: &mut InputBaseState<Self>,
+        offset: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
+        state.handle_selection_ranges(offset, window, cx);
+    }
+
     fn on_mouse_move(
         state: &mut InputBaseState<Self>,
         offset: usize,
@@ -224,6 +233,19 @@ impl crate::input::InputExtras for super::EditorExtras {
         range: &std::ops::Range<usize>,
     ) -> Vec<(std::ops::Range<usize>, gpui::Hsla)> {
         self.lsp.document_colors_for_range(text, range)
+    }
+
+    fn selection_range_swatch(
+        &self,
+        text: &ropey::Rope,
+        range: &std::ops::Range<usize>,
+        color: Option<gpui::Hsla>,
+    ) -> Option<(std::ops::Range<usize>, gpui::Hsla)> {
+        self.lsp.selection_range_for_range(text, range, color)
+    }
+
+    fn clear_selection_range(&mut self) {
+        self.lsp.clear_selection_range();
     }
 
     fn hover_symbol_range(&self) -> Option<std::ops::Range<usize>> {

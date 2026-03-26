@@ -590,11 +590,12 @@ impl TableDelegate for StockTableDelegate {
 
     fn context_menu(
         &mut self,
-        row_ix: usize,
+        cell: (usize, usize),
         menu: PopupMenu,
         _window: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
+        let row_ix = cell.0;
         menu.menu(
             format!("Selected Row: {}", row_ix),
             Box::new(OpenDetail(row_ix)),
@@ -1101,6 +1102,7 @@ impl DataTableStory {
             TableEvent::ClearSelection => {
                 println!("Selection cleared");
             }
+            _ => {}
         }
     }
 

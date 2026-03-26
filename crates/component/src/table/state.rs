@@ -1,4 +1,4 @@
-use std::{ops::Range, rc::Rc, time::Duration};
+use std::{collections::HashSet, ops::Range, rc::Rc, time::Duration};
 
 use crate::{
     ActiveTheme, ElementExt, Icon, IconName, StyleSized as _, StyledExt, VirtualListScrollHandle,
@@ -60,6 +60,8 @@ impl SelectionMode {
 pub enum TableEvent {
     /// Single click or move to selected row.
     SelectRow(usize),
+    /// Multiple rows selected (for multi-select functionality).
+    SelectRows(Vec<usize>),
     /// Double click on the row.
     DoubleClickedRow(usize),
     /// Selected column.
@@ -236,7 +238,8 @@ pub struct TableState<D: TableDelegate> {
     pub vertical_scroll_handle: UniformListScrollHandle,
     pub horizontal_scroll_handle: VirtualListScrollHandle,
 
-    selected_row: Option<usize>,
+    selected_rows: HashSet<usize>,
+    last_selected_row: Option<usize>,
     selection_mode: SelectionMode,
     right_clicked_row: Option<usize>,
     right_clicked_cell: Option<(usize, usize)>,
@@ -273,7 +276,8 @@ where
             horizontal_scroll_handle: VirtualListScrollHandle::new(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
             selection_mode: SelectionMode::Row,
-            selected_row: None,
+            selected_rows: HashSet::new(),
+            last_selected_row: None,
             right_clicked_row: None,
             right_clicked_cell: None,
             selected_col: None,
@@ -453,32 +457,37 @@ where
         })
     }
 
+    /// Returns the selected rows as a HashSet.
+    pub fn selected_rows(&self) -> &HashSet<usize> {
+        &self.selected_rows
+    }
+
     /// Returns the selected row index.
     pub fn selected_row(&self) -> Option<usize> {
-        self.selected_row
+        self.selected_rows.iter().next().copied()
     }
 
     /// Sets the selected row to the given index.
     pub fn set_selected_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
-        let is_down = match self.selected_row {
-            Some(selected_row) => row_ix > selected_row,
-            None => true,
-        };
+        let is_down = self
+            .last_selected_row
+            .map_or(true, |last_selected| row_ix > last_selected);
 
         cx.stop_propagation();
         self.selection_mode = SelectionMode::Row;
         self.right_clicked_row = None;
-        self.selected_row = Some(row_ix);
-        if let Some(row_ix) = self.selected_row {
-            self.vertical_scroll_handle.scroll_to_item(
-                row_ix,
-                if is_down {
-                    ScrollStrategy::Bottom
-                } else {
-                    ScrollStrategy::Top
-                },
-            );
-        }
+        self.selected_rows.clear();
+        self.selected_rows.insert(row_ix);
+        self.last_selected_row = Some(row_ix);
+
+        self.vertical_scroll_handle.scroll_to_item(
+            row_ix,
+            if is_down {
+                ScrollStrategy::Bottom
+            } else {
+                ScrollStrategy::Top
+            },
+        );
         cx.emit(TableEvent::SelectRow(row_ix));
         cx.emit(TableEvent::RightClickedRow(None));
         cx.notify();
@@ -495,6 +504,56 @@ where
     /// to prevent the row context menu from appearing simultaneously.
     pub fn set_right_clicked_row(&mut self, row: Option<usize>, cx: &mut Context<Self>) {
         self.right_clicked_row = row;
+        cx.notify();
+    }
+
+    pub fn select_all_rows(&mut self, cx: &mut Context<Self>) {
+        self.selection_mode = SelectionMode::Row;
+        self.selected_cell = None;
+        self.selected_col = None;
+        let rows = self.delegate.rows_count(cx);
+        for row_ix in 0..rows {
+            self.selected_rows.insert(row_ix);
+        }
+        self.last_selected_row = Some(rows - 1);
+        cx.emit(TableEvent::SelectRow(rows - 1));
+        cx.notify();
+    }
+
+    /// Adds a row to the selection (for multi-select).
+    pub fn add_selected_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        self.selection_mode = SelectionMode::Row;
+        self.right_clicked_row = None;
+        self.selected_rows.insert(row_ix);
+        self.last_selected_row = Some(row_ix);
+        cx.emit(TableEvent::SelectRow(row_ix));
+        cx.notify();
+    }
+
+    /// Removes a row from the selection.
+    pub fn remove_selected_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        self.selected_rows.remove(&row_ix);
+        cx.notify();
+    }
+
+    /// Toggles row selection (adds if not selected, removes if selected).
+    pub fn toggle_selected_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
+        if self.selected_rows.contains(&row_ix) {
+            self.selected_rows.remove(&row_ix);
+            // Update last_selected_row to the next available row if any
+            self.last_selected_row = self.selected_rows.iter().next().copied();
+        } else {
+            self.selected_rows.insert(row_ix);
+            self.last_selected_row = Some(row_ix);
+        }
+
+        // Emit appropriate event based on number of selected rows
+        if self.selected_rows.len() > 1 {
+            let selected_vec: Vec<usize> = self.selected_rows.iter().copied().collect();
+            cx.emit(TableEvent::SelectRows(selected_vec));
+        } else if let Some(&single_row) = self.selected_rows.iter().next() {
+            cx.emit(TableEvent::SelectRow(single_row));
+        }
         cx.notify();
     }
 
@@ -560,9 +619,10 @@ where
     /// Clear the selection of the table.
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         self.selection_mode = SelectionMode::Row;
-        self.selected_row = None;
         self.selected_col = None;
         self.selected_cell = None;
+        self.selected_rows.clear();
+        self.last_selected_row = None;
         cx.emit(TableEvent::ClearSelection);
         cx.notify();
     }
@@ -695,6 +755,8 @@ where
         layout.push(leaf_row);
 
         self.header_layout = layout;
+        self.col_groups.shrink_to_fit();
+        cx.notify();
     }
 
     fn fixed_left_cols_count(&self) -> usize {
@@ -756,7 +818,33 @@ where
             return;
         }
 
-        self.set_selected_row(row_ix, cx);
+        // Check for modifier keys to support multi-selection
+        let ctrl_cmd = e.modifiers().control;
+        let shift = e.modifiers().shift;
+
+        if ctrl_cmd {
+            // Ctrl/Cmd + Click: Toggle selection
+            self.toggle_selected_row(row_ix, cx);
+        } else if shift {
+            // Shift + Click: Range selection
+            if let Some(last_selected) = self.last_selected_row {
+                let start = last_selected.min(row_ix);
+                let end = last_selected.max(row_ix);
+                for row in start..=end {
+                    self.selected_rows.insert(row);
+                }
+                self.last_selected_row = Some(row_ix);
+                let selected_vec: Vec<usize> = self.selected_rows.iter().copied().collect();
+                self.selection_mode = SelectionMode::Row;
+                cx.emit(TableEvent::SelectRows(selected_vec));
+            } else {
+                // No existing selection, just select this row
+                self.set_selected_row(row_ix, cx);
+            }
+        } else {
+            // Normal click: Single selection
+            self.set_selected_row(row_ix, cx);
+        }
 
         if e.click_count() == 2 {
             cx.emit(TableEvent::DoubleClickedRow(row_ix));
@@ -791,25 +879,54 @@ where
             return;
         }
 
+        // Check for modifier keys to support multi-selection
+        let ctrl_cmd = e.modifiers().control;
+        let shift = e.modifiers().shift;
+
         cx.stop_propagation();
 
         let is_double_click = e.click_count() == 2;
 
-        // When the row header column is hidden, a single click on the
-        // already-selected cell escalates the selection to the entire row —
-        // giving users a way to pick rows without the dedicated header column.
-        // Double-clicks are passed through to `DoubleClickedCell` and never
-        // trigger the escalation.
-        let is_reselect =
-            self.selection_mode.is_cell() && self.selected_cell == Some((row_ix, col_ix));
-        let should_escalate_to_row =
-            !self.row_header && self.row_selectable && is_reselect && !is_double_click;
-        if should_escalate_to_row {
-            self.set_selected_row(row_ix, cx);
-            return;
-        }
+        if ctrl_cmd {
+            // Ctrl/Cmd + Click: Toggle selection
+            self.toggle_selected_row(row_ix, cx);
+        } else if shift {
+            // Shift + Click: Range selection
+            if let Some(last_selected) = self.last_selected_row {
+                let start = last_selected.min(row_ix);
+                let end = last_selected.max(row_ix);
+                for row in start..=end {
+                    self.selected_rows.insert(row);
+                }
+                self.last_selected_row = Some(row_ix);
+                let selected_vec: Vec<usize> = self.selected_rows.iter().copied().collect();
+                self.selected_cell = None;
+                self.selection_mode = SelectionMode::Row;
+                cx.emit(TableEvent::SelectRows(selected_vec));
+            } else {
+                // No existing selection, just select this cell
+                self.last_selected_row = Some(row_ix);
+                self.set_selected_cell(row_ix, col_ix, cx);
+            }
+        } else {
+            // When the row header column is hidden, a single click on the
+            // already-selected cell escalates the selection to the entire row —
+            // giving users a way to pick rows without the dedicated header
+            // column. Double-clicks are passed through to `DoubleClickedCell`
+            // and never trigger the escalation.
+            let is_reselect =
+                self.selection_mode.is_cell() && self.selected_cell == Some((row_ix, col_ix));
+            let should_escalate_to_row =
+                !self.row_header && self.row_selectable && is_reselect && !is_double_click;
+            if should_escalate_to_row {
+                self.set_selected_row(row_ix, cx);
+                return;
+            }
 
-        self.set_selected_cell(row_ix, col_ix, cx);
+            // Normal click: Single selection
+            self.last_selected_row = Some(row_ix);
+            self.set_selected_cell(row_ix, col_ix, cx);
+        }
 
         if is_double_click {
             cx.emit(TableEvent::DoubleClickedCell(row_ix, col_ix));
@@ -817,7 +934,7 @@ where
     }
 
     fn has_selection(&self) -> bool {
-        self.selected_row.is_some() || self.selected_col.is_some() || self.selected_cell.is_some()
+        self.selected_row().is_some() || self.selected_col.is_some() || self.selected_cell.is_some()
     }
 
     pub(super) fn action_cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
@@ -858,7 +975,7 @@ where
         }
 
         // Row selection mode
-        let mut selected_row = self.selected_row.unwrap_or(0);
+        let mut selected_row = self.selected_row().unwrap_or(0);
         if selected_row > 0 {
             selected_row = selected_row.saturating_sub(1);
         } else {
@@ -900,7 +1017,7 @@ where
         }
 
         // Row selection mode
-        let selected_row = match self.selected_row {
+        let selected_row = match self.selected_row() {
             Some(selected_row) if selected_row < rows_count.saturating_sub(1) => selected_row + 1,
             Some(selected_row) => {
                 if self.loop_selection {
@@ -980,7 +1097,7 @@ where
         }
 
         // Row selection mode
-        let current = self.selected_row.unwrap_or(0);
+        let current = self.selected_row().unwrap_or(0);
         let target = current.saturating_sub(step);
         self.set_selected_row(target, cx);
     }
@@ -1012,7 +1129,7 @@ where
         }
 
         // Row selection mode
-        let current = self.selected_row.unwrap_or(0);
+        let current = self.selected_row().unwrap_or(0);
         let max_row = rows_count.saturating_sub(1);
         let target = (current + step).min(max_row);
         self.set_selected_row(target, cx);
@@ -1515,12 +1632,14 @@ where
             .bg(cx.theme().tokens.table_head)
             .flex_shrink_0()
             .table_cell_size(self.options.size)
-            .when(!is_head, |this| {
-                this.when(self.row_selectable, |this| {
-                    this.on_click(cx.listener(move |table, _, _window, cx| {
-                        table.set_selected_row(row_ix, cx);
-                    }))
-                })
+            .when(self.row_selectable, |this| {
+                this.on_click(cx.listener(move |table, event: &ClickEvent, window, cx| {
+                    if is_head {
+                        table.select_all_rows(cx);
+                    } else {
+                        table.on_row_left_click(event, row_ix, window, cx);
+                    }
+                }))
             })
     }
 
@@ -1943,7 +2062,7 @@ where
     ) -> Stateful<Div> {
         let horizontal_scroll_handle = self.horizontal_scroll_handle.clone();
         let is_stripe_row = self.options.stripe && row_ix % 2 != 0;
-        let is_selected = self.selected_row == Some(row_ix);
+        let is_selected = self.selected_rows.contains(&row_ix);
         let view = cx.entity().clone();
         let row_height = self.options.size.table_row_height();
 
@@ -2186,25 +2305,23 @@ where
                 )
                 // Row selected style
                 // Note: Don't show row selection if a cell is selected
-                .when_some(self.selected_row, |this, _| {
-                    this.when(is_selected && self.selection_mode.is_row(), |this| {
-                        this.map(|this| {
-                            if cx.theme().list.active_highlight {
-                                this.border_color(gpui::transparent_white()).child(
-                                    div()
-                                        .top(if row_ix == 0 { px(0.) } else { px(-1.) })
-                                        .left(px(0.))
-                                        .right(px(0.))
-                                        .bottom(px(-1.))
-                                        .absolute()
-                                        .bg(cx.theme().tokens.table_active)
-                                        .border_1()
-                                        .border_color(cx.theme().table_active_border),
-                                )
-                            } else {
-                                this.bg(cx.theme().tokens.accent)
-                            }
-                        })
+                .when(is_selected && self.selection_mode.is_row(), |this| {
+                    this.map(|this| {
+                        if cx.theme().list.active_highlight {
+                            this.border_color(gpui::transparent_white()).child(
+                                div()
+                                    .top(if row_ix == 0 { px(0.) } else { px(-1.) })
+                                    .left(px(0.))
+                                    .right(px(0.))
+                                    .bottom(px(-1.))
+                                    .absolute()
+                                    .bg(cx.theme().tokens.table_active)
+                                    .border_1()
+                                    .border_color(cx.theme().table_active_border),
+                            )
+                        } else {
+                            this.bg(cx.theme().tokens.accent)
+                        }
                     })
                 })
                 // Row right click row style
@@ -2325,6 +2442,7 @@ where
     ) -> Option<impl IntoElement> {
         Some(
             div()
+                .occlude()
                 .absolute()
                 .top(self.options.size.table_row_height() * self.header_layout.len().max(1) as f32)
                 .right_0()
@@ -2344,6 +2462,7 @@ where
         _: &mut Context<Self>,
     ) -> impl IntoElement {
         div()
+            .occlude()
             .absolute()
             .left(self.fixed_head_cols_bounds.size.width)
             .right_0()
@@ -2428,9 +2547,10 @@ where
             .context_menu({
                 let view = cx.entity().clone();
                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
-                    if let Some(row_ix) = view.read(cx).right_clicked_row {
+                    let right_clicked_cell = view.read(cx).right_clicked_cell;
+                    if let Some(cell) = right_clicked_cell {
                         view.update(cx, |menu, cx| {
-                            menu.delegate_mut().context_menu(row_ix, this, window, cx)
+                            menu.delegate_mut().context_menu(cell, this, window, cx)
                         })
                     } else {
                         this

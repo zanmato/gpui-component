@@ -99,6 +99,21 @@ pub trait InputExtras: Default + 'static {
         Vec::new()
     }
 
+    /// The enclosing syntactic range to paint behind the text, when a
+    /// selection-range provider resolved one.
+    fn selection_range_swatch(
+        &self,
+        _text: &Rope,
+        _range: &std::ops::Range<usize>,
+        _color: Option<gpui::Hsla>,
+    ) -> Option<(std::ops::Range<usize>, gpui::Hsla)> {
+        None
+    }
+
+    /// Drops the selection-range highlight once the cursor no longer sits
+    /// inside the range it was resolved for.
+    fn clear_selection_range(&mut self) {}
+
     /// The symbol range the hover popover is anchored to.
     fn hover_symbol_range(&self) -> Option<std::ops::Range<usize>> {
         None
@@ -277,6 +292,16 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
     /// Separate from [`Self::on_mouse_move`]: this runs on paths that have no
     /// mouse event to hand over, such as opening the context menu.
     fn on_hover_definition(
+        _state: &mut InputBaseState<Self>,
+        _offset: usize,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
+    }
+
+    /// Requests the hierarchical selection ranges around the cursor, so the
+    /// mode that supports it can highlight the enclosing syntactic range.
+    fn on_selection_ranges(
         _state: &mut InputBaseState<Self>,
         _offset: usize,
         _window: &mut Window,

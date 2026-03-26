@@ -241,6 +241,15 @@ impl TextWrapper {
             return;
         }
 
+        // Skip wrapping at zero or negative width, which can happen before
+        // the element has been laid out. The correct width will be applied
+        // once layout completes.
+        if let Some(width) = wrap_width {
+            if width <= px(0.) {
+                return;
+            }
+        }
+
         self.wrap_width = wrap_width;
         self.update_all(&self.text.clone(), cx);
     }
