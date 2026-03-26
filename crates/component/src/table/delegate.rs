@@ -97,10 +97,10 @@ pub trait TableDelegate: Sized + 'static {
         div().id(("row", row_ix))
     }
 
-    /// Render the context menu for the row at the given row index.
+    /// Render the context menu for given cell.
     fn context_menu(
         &mut self,
-        row_ix: usize,
+        cell: (usize, usize),
         menu: PopupMenu,
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
