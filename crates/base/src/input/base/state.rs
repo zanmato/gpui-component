@@ -1682,8 +1682,12 @@ impl<M: InputModeKind> InputBaseState<M> {
         // In multi-line mode with `submit_on_enter` enabled, a plain `Enter`
         // (without Shift) is treated as submit: propagate the action and emit
         // PressEnter without inserting a newline. `Shift+Enter` still inserts
-        // a newline.
-        let insert_newline = self.is_multi_line() && (!self.submit_on_enter || action.shift);
+        // a newline. A secondary `Enter` (e.g. Ctrl/Cmd+Enter) is always a
+        // submit-style confirm and never inserts a newline, so consumers can
+        // bind it to actions like "run query".
+        let insert_newline = self.is_multi_line()
+            && !action.secondary
+            && (!self.submit_on_enter || action.shift);
 
         if insert_newline {
             if !self.selections.is_single() {
