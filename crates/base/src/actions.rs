@@ -14,6 +14,7 @@ actions!(
     ui,
     [
         Cancel,
+        SelectAll,
         SelectUp,
         SelectDown,
         SelectLeft,
