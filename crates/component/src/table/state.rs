@@ -3,7 +3,7 @@ use std::{collections::HashSet, ops::Range, rc::Rc, time::Duration};
 use crate::{
     ActiveTheme, ElementExt, Icon, IconName, StyleSized as _, StyledExt, VirtualListScrollHandle,
     actions::{
-        Cancel, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown,
+        Cancel, SelectAll, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown,
         SelectPageUp, SelectPrevColumn, SelectUp,
     },
     h_flex,
@@ -226,6 +226,12 @@ pub struct TableState<D: TableDelegate> {
     /// escalates the selection to the whole row so users can still pick rows; row
     /// escalation requires `row_selectable` to be enabled.
     pub row_header: bool,
+    /// Whether the row header column displays the 1-based row number, default is `false`.
+    ///
+    /// Only effective when `cell_selectable` and `row_header` are enabled. When set,
+    /// the leftmost row header column widens to fit the largest row number and renders
+    /// it, replacing the need for a separate data column to show row numbers.
+    pub row_numbers: bool,
     /// Whether the table can sort.
     pub sortable: bool,
     /// Whether the table can resize columns.
@@ -292,6 +298,7 @@ where
             row_selectable: true,
             cell_selectable: false,
             row_header: true,
+            row_numbers: false,
             sortable: true,
             col_movable: true,
             col_resizable: true,
@@ -384,6 +391,16 @@ where
     /// requires `row_selectable` to be enabled.
     pub fn row_header(mut self, row_header: bool) -> Self {
         self.row_header = row_header;
+        self
+    }
+
+    /// Set whether the row header column shows 1-based row numbers, default `false`.
+    ///
+    /// Only effective when both `cell_selectable` and `row_header` are enabled. The
+    /// row header column widens to fit the largest row number so callers don't need
+    /// a dedicated data column for row numbers.
+    pub fn row_numbers(mut self, row_numbers: bool) -> Self {
+        self.row_numbers = row_numbers;
         self
     }
 
@@ -508,10 +525,13 @@ where
     }
 
     pub fn select_all_rows(&mut self, cx: &mut Context<Self>) {
+        let rows = self.delegate.rows_count(cx);
+        if rows == 0 {
+            return;
+        }
         self.selection_mode = SelectionMode::Row;
         self.selected_cell = None;
         self.selected_col = None;
-        let rows = self.delegate.rows_count(cx);
         for row_ix in 0..rows {
             self.selected_rows.insert(row_ix);
         }
@@ -943,6 +963,19 @@ where
             return;
         }
         cx.propagate();
+    }
+
+    pub(super) fn action_select_all(
+        &mut self,
+        _: &SelectAll,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.row_selectable || self.delegate.rows_count(cx) == 0 {
+            cx.propagate();
+            return;
+        }
+        self.select_all_rows(cx);
     }
 
     pub(super) fn action_select_prev(
@@ -1616,6 +1649,18 @@ where
             )
     }
 
+    /// The width of the row header column. When `row_numbers` is enabled, the width
+    /// grows to fit the largest row number; otherwise it's a narrow selection handle.
+    fn row_header_width(&self, cx: &App) -> Pixels {
+        if !self.row_numbers {
+            return px(12.);
+        }
+
+        let count = self.delegate.rows_count(cx).max(1);
+        let digits = count.to_string().len().max(2) as f32;
+        px(16. + digits * 8.)
+    }
+
     /// Render the row header cell (when cell_selectable is enabled)
     fn render_row_header_cell(
         &self,
@@ -1623,23 +1668,46 @@ where
         is_head: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let width = self.row_header_width(cx);
+
         div()
             .id(("row-header", row_ix))
-            .w_3()
+            .w(width)
             .h_full()
             .border_r_1()
-            .border_color(cx.theme().table_row_border)
+            // The head cell needs its own bottom border in the header-separator
+            // color, since the header's bottom border only spans the columns area
+            // to the right. Without it the first row looks like it's missing a top
+            // border under the row-number column. Body cells inherit their bottom
+            // border from the parent row, so they only need the right border.
+            .map(|this| {
+                if is_head {
+                    this.border_b_1().border_color(cx.theme().border)
+                } else {
+                    this.border_color(cx.theme().table_row_border)
+                }
+            })
             .bg(cx.theme().tokens.table_head)
             .flex_shrink_0()
             .table_cell_size(self.options.size)
+            .when(self.row_numbers && !is_head, |this| {
+                this.flex()
+                    .items_center()
+                    .justify_end()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child((row_ix + 1).to_string())
+            })
             .when(self.row_selectable, |this| {
-                this.on_click(cx.listener(move |table, event: &ClickEvent, window, cx| {
-                    if is_head {
-                        table.select_all_rows(cx);
-                    } else {
-                        table.on_row_left_click(event, row_ix, window, cx);
-                    }
-                }))
+                this.cursor_pointer().on_click(cx.listener(
+                    move |table, event: &ClickEvent, window, cx| {
+                        if is_head {
+                            table.select_all_rows(cx);
+                        } else {
+                            table.on_row_left_click(event, row_ix, window, cx);
+                        }
+                    },
+                ))
             })
     }
 
@@ -2358,11 +2426,15 @@ where
                 .when(is_stripe_row, |this| this.bg(cx.theme().tokens.table_even))
                 .when(self.cell_selectable && self.row_header, |this| {
                     // Render empty row header cell for fake rows
+                    let width = self.row_header_width(cx);
                     this.child(
                         div()
-                            .w(px(40.))
+                            .w(width)
                             .h_full()
                             .flex_shrink_0()
+                            .border_r_1()
+                            .border_color(cx.theme().table_row_border)
+                            .bg(cx.theme().table_head)
                             .table_cell_size(self.options.size),
                     )
                 })
