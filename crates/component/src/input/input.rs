@@ -436,18 +436,26 @@ impl RenderOnce for Input {
                     let editable = enabled && !capabilities.is_readonly();
                     let mut menu = NativeMenu::new();
                     if capabilities.is_code_editor() {
-                        menu = menu
-                            .menu_with_disabled(
+                        let has_go_to_definition = enabled && capabilities.has_definition();
+                        let has_code_actions = editable && capabilities.has_code_actions();
+
+                        if has_go_to_definition {
+                            menu = menu.menu(
                                 t!("Input.Go to Definition"),
-                                !(enabled && capabilities.has_definition()),
                                 Box::new(gpui_base::input::GoToDefinition),
-                            )
-                            .menu_with_disabled(
+                            );
+                        }
+
+                        if has_code_actions {
+                            menu = menu.menu(
                                 t!("Input.Show Code Actions"),
-                                !(editable && capabilities.has_code_actions()),
                                 Box::new(gpui_base::input::ToggleCodeActions),
-                            )
-                            .separator();
+                            );
+                        }
+
+                        if has_go_to_definition || has_code_actions {
+                            menu = menu.separator();
+                        }
                     }
                     menu.menu_with_disabled(
                         t!("Input.Cut"),
