@@ -1685,9 +1685,8 @@ impl<M: InputModeKind> InputBaseState<M> {
         // a newline. A secondary `Enter` (e.g. Ctrl/Cmd+Enter) is always a
         // submit-style confirm and never inserts a newline, so consumers can
         // bind it to actions like "run query".
-        let insert_newline = self.is_multi_line()
-            && !action.secondary
-            && (!self.submit_on_enter || action.shift);
+        let insert_newline =
+            self.is_multi_line() && !action.secondary && (!self.submit_on_enter || action.shift);
 
         if insert_newline {
             if !self.selections.is_single() {
@@ -3902,7 +3901,7 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::input::TabSize;
     use crate::theme::Theme;
     use gpui::{TestAppContext, VisualTestContext};
 
@@ -7048,14 +7047,14 @@ mod tests {
                 state.indent(false, window, cx);
             });
         });
-        assert_cursors(&mut cx, &input, "1  |2\n1  |2");
+        assert_cursors(&mut cx, &input, "1 |2\n1 |2");
 
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.outdent(false, window, cx);
             });
         });
-        assert_cursors(&mut cx, &input, "1  |2\n1  |2");
+        assert_cursors(&mut cx, &input, "1 |2\n1 |2");
 
         // A line with leading indentation loses that, wherever the cursor is.
         setup_cursors(&mut cx, &input, "  1|2\n  1|2");
@@ -7139,6 +7138,135 @@ mod tests {
         });
         input.read_with(&cx, |state, _| {
             assert_eq!(state.text.to_string(), "line1\nline2\nline3");
+        });
+    }
+
+    #[gpui::test]
+    fn test_block_indent_normalizes_tabs_to_spaces(cx: &mut TestAppContext) {
+        let view = InputView::build_textarea(cx, |state| {
+            state.tab_size(TabSize {
+                tab_size: 4,
+                hard_tabs: false,
+            })
+        });
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("\tline1\n\tline2", window, cx);
+                let id = state.selections.generate_id();
+                state
+                    .selections
+                    .replace_all(vec![CursorSelection::new(id, 0, state.text.len())]);
+                state.indent(true, window, cx);
+            });
+        });
+
+        input.read_with(&cx, |state, _| {
+            assert_eq!(state.text.to_string(), "        line1\n        line2");
+        });
+    }
+
+    #[gpui::test]
+    fn test_block_outdent_normalizes_tabs_to_spaces(cx: &mut TestAppContext) {
+        let view = InputView::build_textarea(cx, |state| {
+            state.tab_size(TabSize {
+                tab_size: 4,
+                hard_tabs: false,
+            })
+        });
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("\t  line1\n\t  line2", window, cx);
+                let id = state.selections.generate_id();
+                state
+                    .selections
+                    .replace_all(vec![CursorSelection::new(id, 0, state.text.len())]);
+                state.outdent(true, window, cx);
+            });
+        });
+
+        input.read_with(&cx, |state, _| {
+            assert_eq!(state.text.to_string(), "    line1\n    line2");
+        });
+    }
+
+    #[gpui::test]
+    fn test_inline_indent_and_outdent_use_tab_stops(cx: &mut TestAppContext) {
+        let view = InputView::build_textarea(cx, |state| {
+            state.tab_size(TabSize {
+                tab_size: 4,
+                hard_tabs: false,
+            })
+        });
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        setup_cursors(&mut cx, &input, "abc|");
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.indent(false, window, cx));
+        });
+        assert_cursors(&mut cx, &input, "abc |");
+
+        setup_cursors(&mut cx, &input, "\t  |line");
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.outdent(false, window, cx));
+        });
+        assert_cursors(&mut cx, &input, "    |line");
+    }
+
+    #[gpui::test]
+    fn test_block_indent_keeps_column_zero_selection_anchor(cx: &mut TestAppContext) {
+        let view = InputView::build_textarea(cx, |state| {
+            state.tab_size(TabSize {
+                tab_size: 4,
+                hard_tabs: false,
+            })
+        });
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("\tline1\n\tline2", window, cx);
+                let id = state.selections.generate_id();
+                state
+                    .selections
+                    .replace_all(vec![CursorSelection::new(id, 0, state.text.len())]);
+                state.indent(true, window, cx);
+                assert_eq!(state.selections.active().start, 0);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_block_outdent_normalizes_spaces_to_hard_tabs(cx: &mut TestAppContext) {
+        let view = InputView::build_textarea(cx, |state| {
+            state.tab_size(TabSize {
+                tab_size: 4,
+                hard_tabs: true,
+            })
+        });
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        let input = view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("        line1\n        line2", window, cx);
+                let id = state.selections.generate_id();
+                state
+                    .selections
+                    .replace_all(vec![CursorSelection::new(id, 0, state.text.len())]);
+                state.outdent(true, window, cx);
+            });
+        });
+
+        input.read_with(&cx, |state, _| {
+            assert_eq!(state.text.to_string(), "\tline1\n\tline2");
         });
     }
 
