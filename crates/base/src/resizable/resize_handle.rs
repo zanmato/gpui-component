@@ -156,6 +156,7 @@ pub struct ResizeHandle<T: 'static, E: 'static + Render> {
     id: ElementId,
     axis: Axis,
     edge: Option<HandleEdge>,
+    invisible: bool,
     drag: Option<(T, DragConstructor<T, E>)>,
     appearance: Option<ResizeHandleRenderer>,
     /// The band itself. Listeners a caller attaches through the interactive
@@ -172,6 +173,7 @@ impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
             edge: None,
             drag: None,
             appearance: None,
+            invisible: false,
             axis,
             base: div(),
         }
@@ -180,6 +182,13 @@ impl<T: 'static, E: 'static + Render> ResizeHandle<T, E> {
     /// Hand the painted part of this handle to `appearance`.
     pub fn with_appearance(mut self, appearance: ResizeHandleRenderer) -> Self {
         self.appearance = Some(appearance);
+        self
+    }
+
+    /// Hide the handle's divider line while keeping it draggable. The drag
+    /// highlight is still shown, so the split stays discoverable.
+    pub fn invisible(mut self, invisible: bool) -> Self {
+        self.invisible = invisible;
         self
     }
 
@@ -289,7 +298,12 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
         window.with_element_state(id.unwrap(), |state, window| {
             let state: SharedHandleState = state.unwrap_or_default();
 
-            let bg_color = handle_color(&cx.theme(), state.get().is_active());
+            let active = state.get().is_active();
+            let bg_color = if !active && self.invisible {
+                gpui::transparent_black()
+            } else {
+                handle_color(&cx.theme(), active)
+            };
 
             let mut el = base
                 .id(self.id.clone())
