@@ -34,6 +34,7 @@ pub struct ResizablePanelGroup {
     axis: Axis,
     size: Option<Pixels>,
     children: Vec<ResizablePanel>,
+    invisible_handles: bool,
     on_resize: Rc<dyn Fn(&Entity<ResizableState>, &mut Window, &mut App)>,
     handle_appearance: Option<ResizeHandleRenderer>,
 }
@@ -47,6 +48,7 @@ impl ResizablePanelGroup {
             children: vec![],
             state: None,
             size: None,
+            invisible_handles: false,
             on_resize: Rc::new(|_, _, _| {}),
             handle_appearance: None,
         }
@@ -58,6 +60,17 @@ impl ResizablePanelGroup {
     /// returns `None` for a given handle leaves the built-in line on it.
     pub fn with_handle_appearance(mut self, appearance: ResizeHandleRenderer) -> Self {
         self.handle_appearance = Some(appearance);
+        self
+    }
+
+    /// Hide the 1px divider line the resize handles normally draw, while
+    /// keeping them draggable and keeping the highlight shown during a drag.
+    ///
+    /// Useful when the panels already draw their own borders: the handle's
+    /// line spans the full length of the split, so between two bordered
+    /// panels it reads as a third line and overshoots any rounded corners.
+    pub fn invisible_handles(mut self) -> Self {
+        self.invisible_handles = true;
         self
     }
 
@@ -169,6 +182,7 @@ impl RenderOnce for ResizablePanelGroup {
                         panel.axis = self.axis;
                         panel.state = Some(state.clone());
                         panel.handle_appearance = self.handle_appearance.clone();
+                        panel.invisible_handle = self.invisible_handles;
                         panel
                     }),
             )
@@ -245,6 +259,9 @@ pub struct ResizablePanel {
     size_range: Range<Pixels>,
     children: Vec<AnyElement>,
     visible: bool,
+    /// Set by the owning [`ResizablePanelGroup`], see
+    /// [`ResizablePanelGroup::invisible_handles`].
+    invisible_handle: bool,
     style: StyleRefinement,
     handle_appearance: Option<ResizeHandleRenderer>,
 }
@@ -260,6 +277,7 @@ impl ResizablePanel {
             axis: Axis::Horizontal,
             children: vec![],
             visible: true,
+            invisible_handle: false,
             style: StyleRefinement::default(),
             handle_appearance: None,
         }
@@ -367,6 +385,7 @@ impl RenderOnce for ResizablePanel {
                         .when_some(self.handle_appearance.clone(), |handle, appearance| {
                             handle.with_appearance(appearance)
                         })
+                        .invisible(self.invisible_handle)
                         .on_drag(DragPanel, move |drag_panel, _, _, cx| {
                             cx.stop_propagation();
                             // Set current resizing panel ix
