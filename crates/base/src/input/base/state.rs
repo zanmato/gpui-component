@@ -780,7 +780,13 @@ impl<M: InputModeKind> InputBaseState<M> {
 
     /// Install a default adapter without replacing an application-provided one.
     pub fn ensure_highlighter_factory(&mut self, factory: InputHighlighterFactory) {
-        self.mode.ensure_highlighter_factory(factory);
+        // Code-editor mode builds its highlighter lazily from the factory, which
+        // the styled layer only installs at render time. Any content seeded
+        // before that first render parsed with no factory available, so request
+        // a rebuild here or it would stay unhighlighted until the next edit.
+        if self.mode.ensure_highlighter_factory(factory) {
+            self._pending_update = true;
+        }
     }
 
     pub fn set_editor_style(&mut self, style: InputEditorStyle) {
@@ -5541,6 +5547,81 @@ mod tests {
                 state.redo(&Redo, window, cx);
                 assert_eq!(state.value(), "second");
             });
+        });
+    }
+
+    /// A code editor seeded with content *before* the styled layer installs the
+    /// highlighter factory must still get highlighted. The factory is applied at
+    /// render time, so installing it has to request the rebuild that the earlier
+    /// parse could not perform.
+    #[gpui::test]
+    fn test_late_highlighter_factory_rebuilds_highlighter(cx: &mut TestAppContext) {
+        use crate::input::{InputHighlighter, InputHighlighterFactory};
+
+        struct StubHighlighter;
+        impl InputHighlighter for StubHighlighter {
+            fn language(&self) -> SharedString {
+                "sql".into()
+            }
+            fn update(
+                &mut self,
+                _: Option<crate::input::InputEdit>,
+                _: &Rope,
+                _: bool,
+                _: &mut Window,
+                _: &mut Context<crate::input::EditorState>,
+            ) {
+            }
+            fn styles(
+                &self,
+                _: &Range<usize>,
+                _: &dyn crate::input::HighlightStyleResolver,
+            ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+                vec![]
+            }
+            fn fold_ranges(&self, _: &Rope) -> Vec<crate::input::FoldRange> {
+                vec![]
+            }
+        }
+
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                // Seed content while no factory is available, as an application
+                // does when it builds the state and fills it in immediately.
+                state.replace("select 1", window, cx);
+                state._pending_update = false;
+                assert!(
+                    state.mode.highlighter().unwrap().borrow().is_none(),
+                    "precondition: no highlighter without a factory"
+                );
+
+                let factory: InputHighlighterFactory = std::rc::Rc::new(|_| {
+                    Some(Box::new(StubHighlighter) as Box<dyn InputHighlighter>)
+                });
+                state.ensure_highlighter_factory(factory);
+                assert!(
+                    state._pending_update,
+                    "installing the factory must request a highlighter rebuild"
+                );
+            });
+        });
+
+        // The render pass consumes the pending update and builds the highlighter.
+        cx.draw(
+            gpui::Point::default(),
+            gpui::size(gpui::px(500.), gpui::px(500.)),
+            |_, _| gpui::div(),
+        );
+
+        input.read_with(&cx, |state, _| {
+            assert!(
+                state.mode.highlighter().unwrap().borrow().is_some(),
+                "highlighter should exist after the render following factory install"
+            );
         });
     }
 
