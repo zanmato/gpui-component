@@ -345,7 +345,8 @@ impl LayoutMode {
         }
     }
 
-    pub(super) fn ensure_highlighter_factory(&mut self, factory: InputHighlighterFactory) {
+    /// Install `factory` only if none is set yet. Returns whether it was installed.
+    pub(super) fn ensure_highlighter_factory(&mut self, factory: InputHighlighterFactory) -> bool {
         if let LayoutMode::CodeEditor {
             highlighter_factory,
             ..
@@ -353,8 +354,10 @@ impl LayoutMode {
         {
             if highlighter_factory.is_none() {
                 *highlighter_factory = Some(factory);
+                return true;
             }
         }
+        false
     }
 }
 
