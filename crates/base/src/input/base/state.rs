@@ -24,6 +24,7 @@ use super::{
     InputHighlighterFactory, MASK_CHAR, MaskPattern, NativeMenu, NumberStep, WrappingIndent,
     blink_cursor::BlinkCursor,
     change::Change,
+    cursor::{CursorSelection, Selections},
     element::{EditorScrollbar, EditorScrollbarSnapshot, TextElement},
     kind::InputModeKind,
     mask_pattern::normalize_number_input,
@@ -34,7 +35,7 @@ use crate::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
 use crate::input::blink_cursor::CURSOR_WIDTH;
 use crate::input::movement::MoveDirection;
 use crate::input::{
-    InputExtras as _, Position, RopeExt as _, Selection, element::RIGHT_MARGIN, layout::LastLayout,
+    InputExtras as _, Position, RopeExt as _, element::RIGHT_MARGIN, layout::LastLayout,
 };
 use crate::{AutoScroll, StepAction};
 
@@ -305,23 +306,21 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) cursor_surrounding_lines: Option<usize>,
     pub(super) blink_cursor: Entity<BlinkCursor>,
     pub(super) loading: bool,
-    /// Range in UTF-8 length for the selected text.
+    /// The cursors and selections.
     ///
-    /// - "Hello 世界💝" = 16
-    /// - "💝" = 4
-    pub(super) selected_range: Selection,
+    /// Always contains at least one selection where index 0 is the active cursor.
+    pub(super) selections: Selections,
     /// Range for save the selected word, use to keep word range when drag move.
-    pub(super) selected_word_range: Option<Selection>,
-    pub(super) selection_reversed: bool,
+    pub(super) selected_word_range: Option<CursorSelection>,
     /// The marked range is the temporary insert text on IME typing.
-    pub(super) ime_marked_range: Option<Selection>,
+    pub(super) ime_marked_range: Option<CursorSelection>,
     pub(super) last_layout: Option<LastLayout>,
     pub(super) last_cursor: Option<usize>,
     /// The input container bounds
     pub(super) input_bounds: Bounds<Pixels>,
     /// The text bounds
     pub(super) last_bounds: Option<Bounds<Pixels>>,
-    pub(super) last_selected_range: Option<Selection>,
+    pub(super) last_selected_range: Option<CursorSelection>,
     pub(super) selecting: bool,
     pub(crate) disabled: bool,
     pub(crate) readonly: bool,
@@ -401,11 +400,6 @@ pub struct InputBaseState<M: InputModeKind> {
     /// A flag to indicate if we should emit InputEvents.
     pub(super) emit_events: bool,
 
-    /// To remember the horizontal column (x-coordinate) of the cursor position for keep column for move up/down.
-    ///
-    /// The first element is the x-coordinate (Pixels), preferred to use this.
-    /// The second element is the column (usize), fallback to use this.
-    pub(super) preferred_column: Option<(Pixels, usize)>,
     _subscriptions: Vec<Subscription>,
 
     pub(super) auto_scroll: AutoScroll,
@@ -551,7 +545,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     ///
     /// A masked input keeps its value out of the clipboard.
     pub fn is_copyable(&self) -> bool {
-        !self.selected_range.is_empty() && !self.masked
+        !self.active_selection().is_empty() && !self.masked
     }
 
     pub fn context_menu_capabilities(&self) -> InputContextMenuCapabilities {
@@ -560,7 +554,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             .disabled(self.disabled)
             .readonly(self.readonly)
             .code_editor(self.is_code_editor())
-            .selection(!self.selected_range.is_empty())
+            .selection(!self.active_selection().is_empty())
             .masked(self.masked)
             .go_to_definition(go_to_definition)
             .code_actions(code_actions)
@@ -635,9 +629,8 @@ impl<M: InputModeKind> InputBaseState<M> {
             cursor_surrounding_lines: None,
             blink_cursor,
             undo_manager,
-            selected_range: Selection::default(),
+            selections: Selections::default(),
             selected_word_range: None,
-            selection_reversed: false,
             ime_marked_range: None,
             input_bounds: Bounds::default(),
             selecting: false,
@@ -664,7 +657,6 @@ impl<M: InputModeKind> InputBaseState<M> {
             editor_scrollbar_snapshot: Cell::new(None),
             editor_paddings: Edges::default(),
             deferred_scroll_offset: None,
-            preferred_column: None,
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
             mask_pattern_set: false,
@@ -905,7 +897,8 @@ impl<M: InputModeKind> InputBaseState<M> {
             this.undo_manager.set_pending_intent(EditIntent::Atomic);
             let range_utf16 = this.range_to_utf16(&(this.cursor()..this.cursor()));
             this.replace_text_in_range_silent(Some(range_utf16), &text, window, cx);
-            this.selected_range = (this.selected_range.end..this.selected_range.end).into();
+            let end = this.active_selection().end;
+            this.set_cursor_to(end);
         });
     }
 
@@ -922,7 +915,8 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.with_edits_allowed(|this| {
             this.undo_manager.set_pending_intent(EditIntent::Atomic);
             this.replace_text_in_range_silent(None, &text, window, cx);
-            this.selected_range = (this.selected_range.end..this.selected_range.end).into();
+            let end = this.active_selection().end;
+            this.set_cursor_to(end);
         });
     }
 
@@ -947,9 +941,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         // `0..0`.
         if self.is_single_line() {
             let end = self.text.len();
-            self.selected_range = (end..end).into();
+            self.set_cursor_to(end);
         } else {
-            self.selected_range.clear();
+            self.active_selection_mut().clear();
         }
     }
 
@@ -1328,7 +1322,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             return 0;
         }
 
-        let offset = self.selected_range.start;
+        let offset = self.active_selection().start;
         let offset = self.offset_from_utf16(self.offset_to_utf16(offset));
         // FIXME: Avoid to_string
         let left_part = self.text.slice(0..offset).to_string();
@@ -1432,8 +1426,8 @@ impl<M: InputModeKind> InputBaseState<M> {
             return 0;
         }
 
-        let mut offset =
-            self.previous_boundary(self.selected_range.start.min(self.selected_range.end));
+        let active = self.active_selection();
+        let mut offset = self.previous_boundary(active.start.min(active.end));
         if self.text.char_at(offset) == Some('\r') {
             offset += 1;
         }
@@ -1487,7 +1481,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        let intent = if self.selected_range.is_empty() {
+        let intent = if self.active_selection().is_empty() {
             self.select_to(self.previous_boundary(self.cursor()), cx);
             EditIntent::Backspace
         } else {
@@ -1499,7 +1493,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
-        let intent = if self.selected_range.is_empty() {
+        let intent = if self.active_selection().is_empty() {
             self.select_to(self.next_boundary(self.cursor()), cx);
             EditIntent::DeleteForward
         } else {
@@ -1516,7 +1510,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.selected_range.is_empty() {
+        if !self.active_selection().is_empty() {
             self.replace_text_in_range(None, "", window, cx);
             self.pause_blink_cursor(cx);
             return;
@@ -1541,7 +1535,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.selected_range.is_empty() {
+        if !self.active_selection().is_empty() {
             self.replace_text_in_range(None, "", window, cx);
             self.pause_blink_cursor(cx);
             return;
@@ -1566,7 +1560,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.selected_range.is_empty() {
+        if !self.active_selection().is_empty() {
             self.replace_text_in_range(None, "", window, cx);
             self.pause_blink_cursor(cx);
             return;
@@ -1588,7 +1582,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.selected_range.is_empty() {
+        if !self.active_selection().is_empty() {
             self.replace_text_in_range(None, "", window, cx);
             self.pause_blink_cursor(cx);
             return;
@@ -1647,7 +1641,7 @@ impl<M: InputModeKind> InputBaseState<M> {
 
     pub fn clean(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.replace_text("", window, cx);
-        self.selected_range = (0..0).into();
+        self.set_selection(0, 0);
         self.scroll_to(0, None, cx);
     }
 
@@ -1688,7 +1682,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
 
-        if !self.selected_range.contains(offset) {
+        if !self.active_selection().contains(offset) {
             self.move_to(offset, None, cx);
         }
 
@@ -1748,7 +1742,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         // Show Mouse context menu
         if event.button == MouseButton::Right {
             if self.enable_context_menu {
-                if !self.selected_range.contains(offset) {
+                if !self.active_selection().contains(offset) {
                     self.move_to(offset, None, cx);
                 }
                 self.pending_context_menu = Some((event.position, offset));
@@ -1774,8 +1768,8 @@ impl<M: InputModeKind> InputBaseState<M> {
                 self.handle_right_click_menu(position, offset, window, cx);
             }
         }
-        if self.selected_range.is_empty() {
-            self.selection_reversed = false;
+        if self.active_selection().is_empty() {
+            self.active_selection_mut().reversed = false;
         }
         self.selecting = false;
         self.selected_word_range = None;
@@ -1994,7 +1988,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
 
-        let selected_text = self.text.slice(self.selected_range).to_string();
+        let selected_text = self.text.slice(*self.active_selection()).to_string();
         cx.write_to_clipboard(ClipboardItem::new_string(selected_text));
     }
 
@@ -2003,7 +1997,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
 
-        let selected_text = self.text.slice(self.selected_range).to_string();
+        let selected_text = self.text.slice(*self.active_selection()).to_string();
         cx.write_to_clipboard(ClipboardItem::new_string(selected_text));
 
         self.undo_manager.set_pending_intent(EditIntent::Atomic);
@@ -2025,8 +2019,8 @@ impl<M: InputModeKind> InputBaseState<M> {
         range: &Range<usize>,
         new_text: &str,
         requested_intent: Option<EditIntent>,
-        selection_before: Selection,
-        selection_after: Option<Selection>,
+        selection_before: CursorSelection,
+        selection_after: Option<CursorSelection>,
     ) {
         if self.undo_manager.is_ignoring() {
             return;
@@ -2050,12 +2044,12 @@ impl<M: InputModeKind> InputBaseState<M> {
         });
 
         let selection_before = match intent {
-            EditIntent::Backspace => Selection::new(range.end, range.end),
-            EditIntent::DeleteForward => Selection::new(range.start, range.start),
+            EditIntent::Backspace => (range.end..range.end).into(),
+            EditIntent::DeleteForward => (range.start..range.start).into(),
             EditIntent::Typing | EditIntent::Atomic => selection_before,
         };
         let selection_after =
-            selection_after.unwrap_or_else(|| Selection::new(new_range.end, new_range.end));
+            selection_after.unwrap_or_else(|| (new_range.end..new_range.end).into());
 
         self.undo_manager.record_transaction(
             Change::new(
@@ -2078,7 +2072,7 @@ impl<M: InputModeKind> InputBaseState<M> {
                 let range_utf16 = self.range_to_utf16(&change.new_range.into());
                 self.replace_text_in_range_silent(Some(range_utf16), &change.old_text, window, cx);
             }
-            self.selected_range = selection;
+            self.set_selection(selection.start, selection.end);
         }
         self.undo_manager.set_ignoring(false);
     }
@@ -2091,7 +2085,7 @@ impl<M: InputModeKind> InputBaseState<M> {
                 let range_utf16 = self.range_to_utf16(&change.old_range.into());
                 self.replace_text_in_range_silent(Some(range_utf16), &change.new_text, window, cx);
             }
-            self.selected_range = selection;
+            self.set_selection(selection.start, selection.end);
         }
         self.undo_manager.set_ignoring(false);
     }
@@ -2104,11 +2098,34 @@ impl<M: InputModeKind> InputBaseState<M> {
             return ime_marked_range.end;
         }
 
-        if self.selection_reversed {
-            self.selected_range.start
-        } else {
-            self.selected_range.end
-        }
+        self.selections.active().cursor_offset()
+    }
+
+    /// Returns the active selection.
+    pub(super) fn active_selection(&self) -> &CursorSelection {
+        self.selections.active()
+    }
+
+    /// Returns a mutable reference to the active selection.
+    pub(super) fn active_selection_mut(&mut self) -> &mut CursorSelection {
+        self.selections.active_mut()
+    }
+
+    /// Sets the active selection to the given range, keeping its `reversed`
+    /// and `column_anchor` state untouched.
+    pub(super) fn set_selection(&mut self, start: usize, end: usize) {
+        let active = self.active_selection_mut();
+        active.start = start;
+        active.end = end;
+    }
+
+    /// Collapses the active selection to a cursor at the given offset,
+    /// clearing `reversed`.
+    pub(super) fn set_cursor_to(&mut self, offset: usize) {
+        let active = self.active_selection_mut();
+        active.start = offset;
+        active.end = offset;
+        active.reversed = false;
     }
 
     /// Visible row range in the last laid-out viewport, `None` before first layout.
@@ -2140,12 +2157,12 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// that case the offset equals `cursor()`. Byte offsets are measured
     /// in the underlying rope's byte units.
     pub fn selected_range(&self) -> std::ops::Range<usize> {
-        self.selected_range.into()
+        (*self.selections.active()).into()
     }
 
     pub fn select_all(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.undo_manager.break_transaction_coalescing();
-        self.selected_range = (0..self.text.len()).into();
+        self.set_selection(0, self.text.len());
         cx.notify();
     }
 
@@ -2163,7 +2180,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         let end = self.text.clip_offset(range.end, end_bias);
 
         self.move_to(start, None, cx);
-        self.selection_reversed = false;
+        self.active_selection_mut().reversed = false;
         self.selected_word_range = None;
         self.select_to(end, cx);
     }
@@ -2280,27 +2297,29 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         self.cursor_line_end_affinity = line_end_affinity;
         let offset = offset.clamp(0, self.text.len());
-        if self.selection_reversed {
-            self.selected_range.start = offset
+        let word_range = self.selected_word_range;
+        let active = self.active_selection_mut();
+        if active.reversed {
+            active.start = offset
         } else {
-            self.selected_range.end = offset
+            active.end = offset
         };
 
-        if self.selected_range.end < self.selected_range.start {
-            self.selection_reversed = !self.selection_reversed;
-            self.selected_range = (self.selected_range.end..self.selected_range.start).into();
+        if active.end < active.start {
+            active.reversed = !active.reversed;
+            std::mem::swap(&mut active.start, &mut active.end);
         }
 
         // Ensure keep word selected range
-        if let Some(word_range) = self.selected_word_range.as_ref() {
-            if self.selected_range.start > word_range.start {
-                self.selected_range.start = word_range.start;
+        if let Some(word_range) = word_range {
+            if active.start > word_range.start {
+                active.start = word_range.start;
             }
-            if self.selected_range.end < word_range.end {
-                self.selected_range.end = word_range.end;
+            if active.end < word_range.end {
+                active.end = word_range.end;
             }
         }
-        if self.selected_range.is_empty() {
+        if active.is_empty() {
             self.update_preferred_column();
         }
         cx.notify()
@@ -2310,7 +2329,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub fn unselect(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.undo_manager.break_transaction_coalescing();
         let offset = self.cursor();
-        self.selected_range = (offset..offset).into();
+        self.set_cursor_to(offset);
         cx.notify()
     }
 
@@ -2619,7 +2638,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     ///
     /// See [`Self::selected_value`] when an owned string is wanted.
     pub fn selected_text(&self) -> RopeSlice<'_> {
-        let range_utf16 = self.range_to_utf16(&self.selected_range.into());
+        let range_utf16 = self.range_to_utf16(&self.selected_range());
         let range = self.range_from_utf16(&range_utf16);
         self.text.slice(range)
     }
@@ -2665,6 +2684,106 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.silent_replace_text = true;
         self.replace_text_in_range(range_utf16, new_text, window, cx);
         self.silent_replace_text = false;
+    }
+
+    /// Apply a batch of edits as one atomic history transaction.
+    ///
+    /// `edits` are `(byte range in the current pre-edit document, replacement)`
+    /// pairs.
+    pub(crate) fn replace_text_in_ranges(
+        &mut self,
+        edits: &[(Range<usize>, String)],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.disabled || edits.is_empty() {
+            return;
+        }
+
+        // Sort descending by start so applying front-of-vec first edits the
+        // highest offsets first, leaving lower offsets unchanged.
+        let mut sorted: Vec<(Range<usize>, &str)> = edits
+            .iter()
+            .map(|(range, text)| (range.clone(), text.as_str()))
+            .collect();
+        sorted.sort_by_key(|edit| std::cmp::Reverse(edit.0.start));
+
+        #[cfg(debug_assertions)]
+        for pair in sorted.windows(2) {
+            debug_assert!(
+                pair[1].0.end <= pair[0].0.start,
+                "replace_text_in_ranges requires disjoint ranges"
+            );
+        }
+
+        // Wrap multiple edits in one explicit transaction so they undo as a
+        // unit. A single edit records directly, which keeps it eligible for
+        // the undo manager's typing coalescing.
+        let requested_intent = self.undo_manager.take_pending_intent();
+        let selection_before = *self.active_selection();
+        let group = sorted.len() > 1;
+        if group {
+            self.undo_manager.begin_transaction();
+        }
+
+        for (range, new_text) in &sorted {
+            let old_text = self.text.clone();
+            self.text.replace(range.clone(), new_text);
+
+            self.push_history(
+                &old_text,
+                range,
+                new_text,
+                requested_intent,
+                selection_before,
+                None,
+            );
+
+            // Incremental, single-range updates must run per edit.
+            self.display_map
+                .adjust_folds_for_edit(&old_text, range, new_text);
+            self.display_map
+                .on_text_changed(&self.text, range, &Rope::from(*new_text), cx);
+
+            self.mode.update_highlighter(
+                super::mode::HighlighterUpdate {
+                    selected_range: range,
+                    old_text: &old_text,
+                    new_text: &self.text,
+                    change_text: new_text,
+                    force: true,
+                },
+                window,
+                cx,
+            );
+
+            self.update_fold_candidates_incremental(range, new_text);
+        }
+
+        if group {
+            self.undo_manager.commit_transaction();
+        }
+
+        // One observable update per batch instead of one per edit.
+        if let Some(diagnostics) = self.mode.diagnostics_mut() {
+            diagnostics.reset(&self.text)
+        }
+        M::refresh_language_features(self, window, cx);
+        self.update_search(cx);
+
+        // Place the cursor at the end of the primary (topmost in document) edit.
+        let primary = sorted.last().expect("edits is non-empty");
+        let new_offset = (primary.0.start + primary.1.len()).min(self.text.len());
+        self.set_cursor_to(new_offset);
+        self.ime_marked_range.take();
+        self.update_preferred_column();
+        if self.is_multi_line() {
+            self.mode.update_auto_grow(&self.display_map);
+        }
+        if self.emit_events {
+            cx.emit(InputEvent::Change);
+        }
+        cx.notify();
     }
 
     /// Update fold candidates from tree-sitter syntax tree (full extraction).
@@ -2733,7 +2852,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         Some(UTF16Selection {
-            range: self.range_to_utf16(&self.selected_range.into()),
+            range: self.range_to_utf16(&self.selected_range()),
             reversed: false,
         })
     }
@@ -2767,7 +2886,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         if !self.is_editable() {
             return;
         }
-        let selection_before = self.selected_range;
+        let selection_before = *self.active_selection();
 
         if self.blink_cursor.read(cx).visible() {
             self.pause_blink_cursor(cx);
@@ -2786,7 +2905,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
                 let range = self.range_to_utf16(&(range.start..range.end));
                 self.range_from_utf16(&range)
             }))
-            .unwrap_or(self.selected_range.into());
+            .unwrap_or(self.selected_range());
 
         let old_text = self.text.clone();
         self.text.replace(range.clone(), new_text);
@@ -2838,7 +2957,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
                 &self.text.to_string(),
                 Some(EditIntent::Atomic),
                 selection_before,
-                Some(Selection::new(new_offset, new_offset)),
+                Some((new_offset..new_offset).into()),
             );
         } else {
             self.push_history(
@@ -2879,7 +2998,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
 
         self.update_fold_candidates_incremental(&range, new_text);
         M::refresh_language_features(self, window, cx);
-        self.selected_range = (new_offset..new_offset).into();
+        self.set_cursor_to(new_offset);
         self.ime_marked_range.take();
         self.update_preferred_column();
         self.update_search(cx);
@@ -2908,7 +3027,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         if !self.is_editable() {
             return;
         }
-        let selection_before = self.selected_range;
+        let selection_before = *self.active_selection();
 
         let starts_composition = self.ime_marked_range.is_none();
         if starts_composition {
@@ -2928,7 +3047,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
                 let range = self.range_to_utf16(&(range.start..range.end));
                 self.range_from_utf16(&range)
             }))
-            .unwrap_or(self.selected_range.into());
+            .unwrap_or(self.selected_range());
 
         let old_text = self.text.clone();
         self.text.replace(range.clone(), new_text);
@@ -2973,19 +3092,19 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         M::refresh_language_features(self, window, cx);
         if new_text.is_empty() {
             // Cancel selection, when cancel IME input.
-            self.selected_range = (range.start..range.start).into();
+            self.set_cursor_to(range.start);
             self.ime_marked_range = None;
         } else {
             self.ime_marked_range = Some((range.start..range.start + new_text.len()).into());
-            self.selected_range = new_selected_range_utf16
+            let new_range = new_selected_range_utf16
                 .as_ref()
                 .map(|range_utf16| {
                     let new_text = Rope::from(new_text);
                     range.start + new_text.offset_utf16_to_offset(range_utf16.start)
                         ..range.start + new_text.offset_utf16_to_offset(range_utf16.end)
                 })
-                .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len())
-                .into();
+                .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+            self.set_selection(new_range.start, new_range.end);
         }
         if self.is_multi_line() {
             self.mode.update_auto_grow(&self.display_map);
@@ -2996,7 +3115,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             new_text,
             requested_intent,
             selection_before,
-            Some(self.selected_range),
+            Some(*self.active_selection()),
         );
         if new_text.is_empty() {
             self.undo_manager.commit_transaction();
@@ -3614,7 +3733,7 @@ mod tests {
         cx.update(|_, cx| {
             input.read_with(cx, |state, _| {
                 assert_eq!(state.value(), "12.5");
-                let cursor: Range<usize> = state.selected_range.into();
+                let cursor: Range<usize> = state.selected_range();
                 assert_eq!(cursor, 4..4);
             });
         });
@@ -3644,7 +3763,7 @@ mod tests {
         cx.update(|_, cx| {
             input.read_with(cx, |state, _| {
                 assert_eq!(state.value(), ".");
-                let cursor: Range<usize> = state.selected_range.into();
+                let cursor: Range<usize> = state.selected_range();
                 assert_eq!(cursor, 1..1);
             });
         });
@@ -4359,7 +4478,7 @@ mod tests {
                 let range = state.range_to_utf16(&(0..1));
                 state.replace_text_in_range(Some(range), "", window, cx);
                 assert_eq!(state.value(), ".2");
-                let cursor: Range<usize> = state.selected_range.into();
+                let cursor: Range<usize> = state.selected_range();
                 assert_eq!(cursor, 0..0);
 
                 // The user can type a new integer part.
@@ -4423,8 +4542,8 @@ mod tests {
                 state.set_value(value.clone(), window, cx);
 
                 assert_eq!(
-                    state.selected_range,
-                    Selection::new(len, len),
+                    state.selected_range(),
+                    len..len,
                     "single-line caret should be at the end after set_value"
                 );
                 assert_eq!(
@@ -4475,8 +4594,8 @@ mod tests {
                 state.replace_all(value.clone(), window, cx);
                 assert_eq!(state.value(), value);
                 assert_eq!(
-                    state.selected_range,
-                    Selection::new(len, len),
+                    state.selected_range(),
+                    len..len,
                     "single-line caret should be at the end after replace_all"
                 );
                 assert_eq!(
@@ -4554,8 +4673,8 @@ mod tests {
                 state.replace_all("baz\nqux", window, cx);
                 assert_eq!(state.value(), "baz\nqux");
                 assert_eq!(
-                    state.selected_range,
-                    Selection::new(0, 0),
+                    state.selected_range(),
+                    0..0,
                     "multi-line selection should be cleared after replace_all"
                 );
                 assert_eq!(

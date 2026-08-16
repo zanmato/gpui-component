@@ -2,14 +2,16 @@ use std::fmt::Debug;
 
 use crate::input::Selection;
 
+use super::cursor::CursorSelection;
+
 #[derive(Debug, PartialEq, Clone)]
 pub(super) struct Change {
     pub(crate) old_range: Selection,
     pub(crate) old_text: String,
     pub(crate) new_range: Selection,
     pub(crate) new_text: String,
-    pub(crate) selection_before: Selection,
-    pub(crate) selection_after: Selection,
+    pub(crate) selection_before: CursorSelection,
+    pub(crate) selection_after: CursorSelection,
 }
 
 impl Change {
@@ -18,8 +20,8 @@ impl Change {
         old_text: &str,
         new_range: impl Into<Selection>,
         new_text: &str,
-        selection_before: Selection,
-        selection_after: Selection,
+        selection_before: CursorSelection,
+        selection_after: CursorSelection,
     ) -> Self {
         Self {
             old_range: old_range.into(),
