@@ -2214,13 +2214,7 @@ impl<M: InputModeKind> InputBaseState<M> {
                 row_offset_y += pos.y;
                 if col_offset_x - safety_margin < -scroll_offset.x {
                     // If the position is out of the visible area, scroll to make it visible
-                    // scroll_offset.x = -col_offset_x + RIGHT_MARGIN;
-
-                    scroll_offset.x = if self.is_multi_line() {
-                        -col_offset_x + safety_margin
-                    } else {
-                        -col_offset_x
-                    };
+                    scroll_offset.x = -col_offset_x + safety_margin;
                 } else if col_offset_x + safety_margin > -scroll_offset.x + bounds_width {
                     scroll_offset.x = -(col_offset_x - bounds_width + safety_margin);
                 }
@@ -4417,6 +4411,52 @@ mod tests {
                     deferred.y,
                     safe_y_min,
                 );
+            });
+        });
+    }
+
+    /// Moving the cursor within text that already fits the viewport must not
+    /// produce a deferred horizontal scroll. A cursor near the left edge used
+    /// to be treated as "out of view" because of the safety margin, which
+    /// painted the text shifted left for one frame before the clamp in
+    /// `update_scroll_offset` pulled it back.
+    #[gpui::test]
+    fn test_move_within_visible_text_does_not_scroll_horizontally(cx: &mut TestAppContext) {
+        let input_view = InputView::build(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("abc", window, cx);
+                state.move_to(0, None, window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                assert_eq!(state.scroll_offset().x, px(0.));
+                state.move_to(1, None, window, cx);
+                let deferred = state
+                    .deferred_scroll_offset
+                    .expect("scroll_to should populate deferred_scroll_offset");
+                assert_eq!(
+                    deferred.x,
+                    px(0.),
+                    "cursor is visible, so the text must not be shifted"
+                );
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.move_to(0, None, window, cx);
+                let deferred = state
+                    .deferred_scroll_offset
+                    .expect("scroll_to should populate deferred_scroll_offset");
+                assert_eq!(deferred.x, px(0.));
             });
         });
     }
