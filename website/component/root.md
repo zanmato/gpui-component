@@ -48,6 +48,8 @@ be the window's root view so window-level facilities such as dialogs, sheets,
 notifications, focus traversal, and text selection remain available. Client-side
 window borders are selected from the window's decoration mode; server-decorated
 and layer-shell windows do not require Root configuration.
+The border draws in the `window.border` theme color, which falls back to `border`
+when a theme does not set it.
 
 `open_window` returns the window and the view, so a view that must be built inside the window (it owns an `InputState`, say) can still be kept:
 
