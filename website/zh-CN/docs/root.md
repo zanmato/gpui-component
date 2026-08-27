@@ -37,6 +37,9 @@ fn main() {
 cx.new(|cx| Root::new(view, window, cx).bordered(false))
 ```
 
+边框使用 `window.border` 主题色，主题未设置时回退到 `border`。窗口边框属于客户端装饰，
+因此该设置仅在 Linux 上生效。
+
 ## 浮层
 
 对话框、抽屉、通知等 UI 都需要一个统一的展示层，[Root] 提供了这些浮层的渲染入口：

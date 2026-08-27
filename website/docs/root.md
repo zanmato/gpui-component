@@ -39,6 +39,10 @@ wrapper, disable it with `bordered(false)`:
 cx.new(|cx| Root::new(view, window, cx).bordered(false))
 ```
 
+The border draws in the `window.border` theme color, which falls back to `border`
+when a theme does not set it. The window border is client-side decoration, so this
+only has an effect on Linux.
+
 ## Overlays
 
 We have dialogs, sheets, notifications, we need placement for them to show, so [Root] provides methods to render these overlays:
