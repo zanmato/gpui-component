@@ -46,6 +46,7 @@ impl Render for BootstrapView {
 `gpui_kit::open_window` 就是 `cx.open_window` 加上 `Root` 包裹。`Root` 必须是窗口的根视图，
 以提供对话框、侧边面板、通知、焦点遍历和文本选择等窗口级能力。客户端窗口边框由窗口的
 decorations 模式决定；server decorations 和 layer-shell 窗口不需要配置 Root。
+边框使用 `window.border` 主题色，主题未设置时回退到 `border`。
 
 `open_window` 同时返回窗口和视图，所以必须在窗口内构造的视图（比如它持有 `InputState`）也能留住句柄：
 
