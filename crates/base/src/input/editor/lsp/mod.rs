@@ -13,6 +13,7 @@ mod hover;
 mod overlay;
 mod selection_ranges;
 mod semantic_tokens;
+mod signature_help;
 
 pub use code_actions::*;
 pub use completions::*;
@@ -22,6 +23,44 @@ pub use hover::*;
 pub use overlay::*;
 pub use selection_ranges::*;
 pub use semantic_tokens::*;
+pub use signature_help::*;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use crate::input::{EditorMode, EditorState, InputBaseState};
+    use crate::theme::Theme;
+    use gpui::{Entity, TestAppContext, VisualTestContext, div, prelude::*};
+
+    struct TestRoot(Entity<InputBaseState<EditorMode>>);
+
+    impl Render for TestRoot {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().size_full().child(self.0.clone())
+        }
+    }
+
+    /// Open an editor state in a test window, for the LSP tests.
+    pub(crate) fn build_editor(
+        cx: &mut TestAppContext,
+    ) -> (Entity<InputBaseState<EditorMode>>, VisualTestContext) {
+        let mut editor = None;
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.set_global(Theme::default());
+                crate::input::init(cx);
+                editor = Some(cx.new(|cx| EditorState::new(window, cx)));
+                cx.new(|_| TestRoot(editor.clone().unwrap()))
+            })
+            .unwrap()
+        });
+        let cx = VisualTestContext::from_window(window.into(), cx);
+        (editor.unwrap(), cx)
+    }
+}
 
 /// Host hook to show a document when following an LSP location
 /// (Go to Definition), modeled after the `window/showDocument` request.
@@ -47,6 +86,8 @@ pub struct Lsp {
     pub hover_provider: Option<Rc<dyn HoverProvider>>,
     /// The definition provider.
     pub definition_provider: Option<Rc<dyn DefinitionProvider>>,
+    /// The signature help provider.
+    pub signature_help_provider: Option<Rc<dyn SignatureHelpProvider>>,
     /// The document color provider.
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
@@ -72,6 +113,7 @@ pub struct Lsp {
     pub(crate) _document_color_task: Task<()>,
     pub(crate) _semantic_tokens_task: Task<()>,
     pub(crate) _selection_range_task: Task<Result<()>>,
+    pub(crate) _signature_help_task: Task<()>,
 }
 
 impl Default for Lsp {
@@ -81,6 +123,7 @@ impl Default for Lsp {
             code_action_providers: vec![],
             hover_provider: None,
             definition_provider: None,
+            signature_help_provider: None,
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
@@ -93,6 +136,7 @@ impl Default for Lsp {
             _document_color_task: Task::ready(()),
             _semantic_tokens_task: Task::ready(()),
             _selection_range_task: Task::ready(Ok(())),
+            _signature_help_task: Task::ready(()),
         }
     }
 }
@@ -140,6 +184,7 @@ impl Lsp {
         self._document_color_task = Task::ready(());
         self._semantic_tokens_task = Task::ready(());
         self._selection_range_task = Task::ready(Ok(()));
+        self._signature_help_task = Task::ready(());
     }
 }
 
