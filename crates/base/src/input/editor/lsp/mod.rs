@@ -12,6 +12,7 @@ mod document_colors;
 mod hover;
 mod overlay;
 mod semantic_tokens;
+mod snippet;
 mod workspace_edit;
 
 pub use code_actions::*;
@@ -21,6 +22,7 @@ pub use document_colors::*;
 pub use hover::*;
 pub use overlay::*;
 pub use semantic_tokens::*;
+pub(crate) use snippet::*;
 
 #[cfg(test)]
 pub(crate) mod test_support {

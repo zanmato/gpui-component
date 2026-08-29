@@ -31,6 +31,7 @@ pub fn client_capabilities() -> ClientCapabilities {
             synchronization: Some(lsp_types::TextDocumentSyncClientCapabilities::default()),
             completion: Some(lsp_types::CompletionClientCapabilities {
                 completion_item: Some(lsp_types::CompletionItemCapability {
+                    snippet_support: Some(true),
                     documentation_format: Some(vec![
                         lsp_types::MarkupKind::Markdown,
                         lsp_types::MarkupKind::PlainText,

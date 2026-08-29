@@ -172,7 +172,7 @@ impl InputBaseState<EditorMode> {
     ) {
         use crate::input::RopeExt as _;
 
-        let primary = match item.text_edit.as_ref() {
+        let mut primary = match item.text_edit.as_ref() {
             Some(lsp_types::CompletionTextEdit::Edit(edit)) => edit.clone(),
             Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) => {
                 lsp_types::TextEdit::new(edit.replace, edit.new_text.clone())
@@ -194,6 +194,15 @@ impl InputBaseState<EditorMode> {
             }
         };
 
+        // A snippet-format insert text is parsed down to plain text; the
+        // tabstops become a snippet session over the inserted range.
+        let snippet =
+            (item.insert_text_format == Some(lsp_types::InsertTextFormat::SNIPPET)).then(|| {
+                let parsed = super::parse_snippet(&primary.new_text);
+                primary.new_text = parsed.text.clone();
+                parsed
+            });
+
         // The primary edit and the item's additional edits (auto-imports and
         // the like) land as one atomic batch: correctly anchored regardless
         // of order, and undone in a single step.
@@ -201,12 +210,24 @@ impl InputBaseState<EditorMode> {
         edits.extend(item.additional_text_edits.clone().unwrap_or_default());
 
         self.completion_inserting = true;
-        if !self.apply_text_edits(&edits, window, cx) {
-            // A server sent additional edits overlapping the primary edit;
-            // salvage the confirmation itself.
-            self.apply_text_edits(&[primary], window, cx);
-        }
+        let mapped = self
+            .apply_text_edits_mapped(&edits, window, cx)
+            .or_else(|| {
+                // A server sent additional edits overlapping the primary
+                // edit; salvage the confirmation itself.
+                self.apply_text_edits_mapped(&[primary], window, cx)
+            });
         self.completion_inserting = false;
+
+        if let (Some(mapped), Some(parsed)) = (mapped, snippet) {
+            let base = mapped[0].start;
+            let stops = parsed
+                .stops
+                .iter()
+                .map(|stop| base + stop.start..base + stop.end)
+                .collect();
+            self.start_snippet_session(stops, cx);
+        }
         self.focus(window, cx);
     }
 

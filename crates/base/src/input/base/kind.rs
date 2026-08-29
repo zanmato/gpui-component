@@ -201,6 +201,21 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
     ) {
     }
 
+    /// Moves an active snippet session to its next (or previous) tabstop,
+    /// when Tab should jump instead of indenting. Returns true when it did.
+    fn snippet_tab(
+        _state: &mut InputBaseState<Self>,
+        _forward: bool,
+        _cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) -> bool {
+        false
+    }
+
+    /// Ends an active snippet session. Returns whether one was active.
+    fn end_snippet_session(_state: &mut InputBaseState<Self>) -> bool {
+        false
+    }
+
     /// Takes the pending inline completion, when Tab should accept it.
     fn accept_inline_completion(
         _state: &mut InputBaseState<Self>,
@@ -331,6 +346,7 @@ pub struct EditorExtras {
     pub(crate) hover_popover: Option<HoverPopoverState>,
     pub(crate) hover_definition: HoverDefinition,
     pub(crate) context_menu_task: Task<anyhow::Result<()>>,
+    pub(crate) snippet: Option<crate::input::lsp::SnippetSession>,
 }
 
 impl Default for EditorExtras {
@@ -343,6 +359,7 @@ impl Default for EditorExtras {
             hover_popover: None,
             hover_definition: HoverDefinition::default(),
             context_menu_task: Task::ready(Ok(())),
+            snippet: None,
         }
     }
 }

@@ -205,6 +205,10 @@ impl<M: InputModeKind> InputBaseState<M> {
         if M::accept_inline_completion(self, window, cx) {
             return;
         }
+        // Then let an active snippet session take Tab to its next stop.
+        if M::snippet_tab(self, true, cx) {
+            return;
+        }
         self.indent(false, window, cx);
     }
 
@@ -218,6 +222,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if M::snippet_tab(self, false, cx) {
+            return;
+        }
         self.outdent(false, window, cx);
     }
 

@@ -80,13 +80,34 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.apply_text_edits_mapped(edits, window, cx).is_some()
+    }
+
+    /// Like [`Self::apply_text_edits`], but also returns where each input
+    /// edit's new text landed in the updated document, in input order.
+    /// `None` when the edits overlap and nothing was applied.
+    pub(crate) fn apply_text_edits_mapped(
+        &mut self,
+        edits: &[TextEdit],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<Range<usize>>> {
         if edits.is_empty() {
-            return true;
+            return Some(vec![]);
         }
 
-        let Some(resolved) = resolve_edits(&self.text, edits) else {
-            return false;
-        };
+        let resolved = resolve_edits(&self.text, edits)?;
+        // Pair each sorted edit back to its input position so the mapped
+        // ranges can be returned in input order.
+        let mut order: Vec<usize> = (0..edits.len()).collect();
+        order.sort_by_key(|&input| {
+            let start = self.text.position_to_offset(&edits[input].range.start);
+            let end = self
+                .text
+                .position_to_offset(&edits[input].range.end)
+                .max(start);
+            (start, end)
+        });
 
         let cursor = self.cursor();
         let (covering, replacement) = merge_edits(&self.text, &resolved);
@@ -96,7 +117,16 @@ impl InputBaseState<EditorMode> {
 
         let cursor = map_offset_through_edits(cursor, &resolved).min(self.text.len());
         self.selected_range = (cursor..cursor).into();
-        true
+
+        let mut mapped = vec![0..0; edits.len()];
+        let mut delta = 0isize;
+        for (sorted, &input) in order.iter().enumerate() {
+            let (range, new_text) = &resolved[sorted];
+            let start = (range.start as isize + delta) as usize;
+            mapped[input] = start..start + new_text.len();
+            delta += new_text.len() as isize - range.len() as isize;
+        }
+        Some(mapped)
     }
 
     /// Apply the parts of a [`WorkspaceEdit`] that target the current

@@ -1650,6 +1650,12 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
 
+        // End an active snippet session before anything else.
+        if M::end_snippet_session(self) {
+            cx.notify();
+            return;
+        }
+
         // Clear inline completion on escape
         if M::has_inline_completion(self) {
             M::clear_inline_completion(self, cx);

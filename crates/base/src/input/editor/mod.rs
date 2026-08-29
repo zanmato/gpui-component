@@ -38,6 +38,7 @@ impl InputModeKind for EditorMode {
     fn reset_annotations(state: &mut InputBaseState<Self>) {
         state.extras.hover_popover = None;
         state.extras.decorations.clear();
+        state.extras.snippet = None;
     }
 
     fn adjust_annotations(
@@ -46,6 +47,19 @@ impl InputModeKind for EditorMode {
         new_len: usize,
     ) {
         state.extras.decorations.adjust_for_edit(range, new_len);
+        state.adjust_snippet_session(range, new_len);
+    }
+
+    fn snippet_tab(
+        state: &mut InputBaseState<Self>,
+        forward: bool,
+        cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) -> bool {
+        state.snippet_tab(forward, cx)
+    }
+
+    fn end_snippet_session(state: &mut InputBaseState<Self>) -> bool {
+        state.end_snippet_session()
     }
 
     fn refresh_language_features(
