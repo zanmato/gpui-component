@@ -108,6 +108,7 @@ impl Lsp {
     pub(crate) fn update_semantic_tokens(
         &mut self,
         text: &Rope,
+        version: u64,
         window: &mut Window,
         cx: &mut Context<InputBaseState<EditorMode>>,
     ) {
@@ -138,6 +139,9 @@ impl Lsp {
                 if let Ok(tokens) = task.await {
                     let decoded = decode_semantic_tokens(&tokens, &legend);
                     let _ = input_state.update(cx, |input_state, cx| {
+                        if input_state.document_version() != version {
+                            return;
+                        }
                         if decoded != input_state.extras.lsp.semantic_tokens {
                             input_state.extras.lsp.semantic_tokens = decoded;
                             cx.notify();

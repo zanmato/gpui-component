@@ -83,6 +83,7 @@ impl Lsp {
     pub(crate) fn update_document_colors(
         &mut self,
         text: &Rope,
+        version: u64,
         window: &mut Window,
         cx: &mut Context<InputBaseState<EditorMode>>,
     ) {
@@ -107,6 +108,9 @@ impl Lsp {
             if let Some(task) = task_result {
                 if let Ok(colors) = task.await {
                     let _ = input_state.update(cx, |input_state, cx| {
+                        if input_state.document_version() != version {
+                            return;
+                        }
                         let Some(document_colors) = document_colors_from_response(&colors) else {
                             return;
                         };
