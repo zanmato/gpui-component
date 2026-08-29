@@ -200,6 +200,7 @@ impl InputBaseState<EditorMode> {
 
         let provider_responses =
             provider.completions(&self.text, new_offset, completion_context, window, cx);
+        let version = self.document_version;
         self.extras.context_menu_task = cx.spawn_in(window, async move |editor, cx| {
             let mut completions: Vec<CompletionItem> = vec![];
             if let Some(provider_responses) = provider_responses.await.ok() {
@@ -222,6 +223,9 @@ impl InputBaseState<EditorMode> {
             editor
                 .update_in(cx, |editor, window, cx| {
                     if !editor.focus_handle.is_focused(window) {
+                        return;
+                    }
+                    if editor.document_version != version {
                         return;
                     }
 
@@ -296,6 +300,7 @@ impl InputBaseState<EditorMode> {
         let text = self.text.clone();
         let debounce = provider.inline_completion_debounce();
         let background_executor = cx.background_executor().clone();
+        let version = self.document_version;
 
         self.extras.inline_completion.task = cx.spawn_in(window, async move |editor, cx| {
             // Debounce: wait before fetching to avoid unnecessary requests while typing
@@ -303,8 +308,8 @@ impl InputBaseState<EditorMode> {
 
             // Now fetch the inline completion after the debounce period
             let task = editor.update_in(cx, |editor, window, cx| {
-                // Check if cursor has moved during debounce
-                if editor.cursor() != offset {
+                // Check if the document or cursor has changed during debounce
+                if editor.cursor() != offset || editor.document_version != version {
                     return None;
                 }
 
@@ -328,8 +333,8 @@ impl InputBaseState<EditorMode> {
             let response = task.await?;
 
             editor.update_in(cx, |editor, _window, cx| {
-                // Only apply if cursor still hasn't moved
-                if editor.cursor() != offset {
+                // Only apply if the document and cursor are still unchanged
+                if editor.cursor() != offset || editor.document_version != version {
                     return;
                 }
 
