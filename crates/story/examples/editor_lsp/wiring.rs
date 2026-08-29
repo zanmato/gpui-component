@@ -6,8 +6,8 @@ use anyhow::Result;
 use gpui::{App, Entity, SharedString, Task, Window};
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, DefinitionProvider, DocumentColorProvider,
-    DocumentHighlightProvider, DocumentRangeSemanticTokensProvider, EditorState, HoverProvider,
-    ReferencesProvider, Rope, RopeExt, SignatureHelpProvider,
+    DocumentHighlightProvider, DocumentRangeSemanticTokensProvider, DocumentSymbolProvider,
+    EditorState, HoverProvider, ReferencesProvider, Rope, RopeExt, SignatureHelpProvider,
 };
 use lsp_types::{
     ClientCapabilities, CodeAction, CodeActionOrCommand, ColorInformation, CompletionContext,
@@ -79,6 +79,10 @@ pub fn client_capabilities() -> ClientCapabilities {
             }),
             document_highlight: Some(lsp_types::DocumentHighlightClientCapabilities::default()),
             references: Some(lsp_types::ReferenceClientCapabilities::default()),
+            document_symbol: Some(lsp_types::DocumentSymbolClientCapabilities {
+                hierarchical_document_symbol_support: Some(true),
+                ..Default::default()
+            }),
             color_provider: Some(lsp_types::DocumentColorClientCapabilities::default()),
             semantic_tokens: Some(lsp_types::SemanticTokensClientCapabilities {
                 requests: lsp_types::SemanticTokensClientCapabilitiesRequests {
@@ -257,6 +261,9 @@ pub fn install_providers(
         if truthy(&capabilities.references_provider) {
             lsp.references_provider = Some(providers.clone());
         }
+        if truthy(&capabilities.document_symbol_provider) {
+            lsp.document_symbol_provider = Some(providers.clone());
+        }
         if capabilities.color_provider.is_some() {
             lsp.document_color_provider = Some(providers.clone());
         }
@@ -377,6 +384,28 @@ impl SignatureHelpProvider for ServerProviders {
 
     fn retrigger_characters(&self) -> Vec<String> {
         self.signature_help_retriggers.clone()
+    }
+}
+
+impl DocumentSymbolProvider for ServerProviders {
+    fn document_symbols(
+        &self,
+        _text: &Rope,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Option<lsp_types::DocumentSymbolResponse>>> {
+        let request = self
+            .client
+            .request::<lsp_types::request::DocumentSymbolRequest>(
+                lsp_types::DocumentSymbolParams {
+                    text_document: TextDocumentIdentifier {
+                        uri: self.uri.clone(),
+                    },
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            );
+        cx.spawn(async move |_| request.await)
     }
 }
 

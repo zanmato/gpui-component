@@ -79,6 +79,16 @@ impl InputBaseState<EditorMode> {
         cx: &mut Context<Self>,
     ) {
         let items = self.picker_locations(locations);
+        self.present_picker_locations(title, items, cx);
+    }
+
+    /// Open the locations picker over already-built rows.
+    pub fn present_picker_locations(
+        &mut self,
+        title: impl Into<SharedString>,
+        items: Vec<PickerLocation>,
+        cx: &mut Context<Self>,
+    ) {
         let picker = &mut self.extras.locations_picker;
         picker.title = title.into();
         picker.items = items;

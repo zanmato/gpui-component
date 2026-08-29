@@ -105,6 +105,7 @@ actions!(
         ToggleCodeActions,
         ToggleSignatureHelp,
         FindAllReferences,
+        ToggleDocumentSymbols,
         Search,
         Replace,
         GoToDefinition,
@@ -263,6 +264,10 @@ pub(crate) fn init(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-space", ToggleSignatureHelp, Some(CONTEXT)),
         KeyBinding::new("shift-f12", FindAllReferences, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-o", ToggleDocumentSymbols, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-o", ToggleDocumentSymbols, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-.", ToggleCodeActions, Some(CONTEXT)),
         #[cfg(target_os = "macos")]

@@ -83,9 +83,9 @@ pub use kind::{
 pub use lsp::{
     CodeActionItem, CodeActionMenuState, CodeActionProvider, CompletionMenuOptions,
     CompletionMenuState, CompletionProvider, DefinitionProvider, DocumentColorProvider,
-    DocumentHighlightProvider, DocumentRangeSemanticTokensProvider, HoverPopoverState,
-    HoverProvider, InputOverlayKind, LocationsPickerState, Lsp, PickerLocation, ReferencesProvider,
-    ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState,
+    DocumentHighlightProvider, DocumentRangeSemanticTokensProvider, DocumentSymbolProvider,
+    HoverPopoverState, HoverProvider, InputOverlayKind, LocationsPickerState, Lsp, PickerLocation,
+    ReferencesProvider, ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState,
 };
 pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;

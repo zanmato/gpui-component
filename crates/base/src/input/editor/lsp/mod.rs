@@ -10,6 +10,7 @@ mod completions;
 mod definitions;
 mod document_colors;
 mod document_highlights;
+mod document_symbols;
 mod hover;
 mod overlay;
 mod references;
@@ -23,6 +24,7 @@ pub use completions::*;
 pub use definitions::*;
 pub use document_colors::*;
 pub use document_highlights::*;
+pub use document_symbols::*;
 pub use hover::*;
 pub use overlay::*;
 pub use references::*;
@@ -97,6 +99,8 @@ pub struct Lsp {
     pub document_highlight_provider: Option<Rc<dyn DocumentHighlightProvider>>,
     /// The references provider.
     pub references_provider: Option<Rc<dyn ReferencesProvider>>,
+    /// The document symbol provider.
+    pub document_symbol_provider: Option<Rc<dyn DocumentSymbolProvider>>,
     /// The document color provider.
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
@@ -128,6 +132,7 @@ pub struct Lsp {
     pub(crate) _signature_help_task: Task<()>,
     pub(crate) _document_highlight_task: Task<()>,
     pub(crate) _references_task: Task<()>,
+    pub(crate) _document_symbols_task: Task<()>,
 }
 
 impl Default for Lsp {
@@ -143,6 +148,8 @@ impl Default for Lsp {
             _document_highlight_task: Task::ready(()),
             references_provider: None,
             _references_task: Task::ready(()),
+            document_symbol_provider: None,
+            _document_symbols_task: Task::ready(()),
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
@@ -200,6 +207,7 @@ impl Lsp {
         self.document_highlights.clear();
         self._document_highlight_task = Task::ready(());
         self._references_task = Task::ready(());
+        self._document_symbols_task = Task::ready(());
     }
 }
 
