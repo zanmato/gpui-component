@@ -6,8 +6,8 @@ use anyhow::Result;
 use gpui::{App, Entity, SharedString, Task, Window};
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, DefinitionProvider, DocumentColorProvider,
-    DocumentRangeSemanticTokensProvider, EditorState, HoverProvider, Rope, RopeExt,
-    SignatureHelpProvider,
+    DocumentHighlightProvider, DocumentRangeSemanticTokensProvider, EditorState, HoverProvider,
+    Rope, RopeExt, SignatureHelpProvider,
 };
 use lsp_types::{
     ClientCapabilities, CodeAction, CodeActionOrCommand, ColorInformation, CompletionContext,
@@ -77,6 +77,7 @@ pub fn client_capabilities() -> ClientCapabilities {
                 }),
                 ..Default::default()
             }),
+            document_highlight: Some(lsp_types::DocumentHighlightClientCapabilities::default()),
             color_provider: Some(lsp_types::DocumentColorClientCapabilities::default()),
             semantic_tokens: Some(lsp_types::SemanticTokensClientCapabilities {
                 requests: lsp_types::SemanticTokensClientCapabilitiesRequests {
@@ -249,6 +250,9 @@ pub fn install_providers(
         if capabilities.signature_help_provider.is_some() {
             lsp.signature_help_provider = Some(providers.clone());
         }
+        if truthy(&capabilities.document_highlight_provider) {
+            lsp.document_highlight_provider = Some(providers.clone());
+        }
         if capabilities.color_provider.is_some() {
             lsp.document_color_provider = Some(providers.clone());
         }
@@ -369,6 +373,26 @@ impl SignatureHelpProvider for ServerProviders {
 
     fn retrigger_characters(&self) -> Vec<String> {
         self.signature_help_retriggers.clone()
+    }
+}
+
+impl DocumentHighlightProvider for ServerProviders {
+    fn document_highlights(
+        &self,
+        text: &Rope,
+        offset: usize,
+        cx: &mut App,
+    ) -> Task<Result<Vec<lsp_types::DocumentHighlight>>> {
+        let request = self
+            .client
+            .request::<lsp_types::request::DocumentHighlightRequest>(
+                lsp_types::DocumentHighlightParams {
+                    text_document_position_params: self.document_position(text, offset),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            );
+        cx.spawn(async move |_| Ok(request.await?.unwrap_or_default()))
     }
 }
 

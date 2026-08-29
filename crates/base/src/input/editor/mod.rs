@@ -48,6 +48,15 @@ impl InputModeKind for EditorMode {
     ) {
         state.extras.decorations.adjust_for_edit(range, new_len);
         state.adjust_snippet_session(range, new_len);
+        // Occurrence highlights anchor to the pre-edit text.
+        state.extras.lsp.document_highlights.clear();
+    }
+
+    fn on_cursor_moved(
+        state: &mut InputBaseState<Self>,
+        cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
+        state.schedule_document_highlights(cx);
     }
 
     fn snippet_tab(
@@ -240,6 +249,34 @@ impl crate::input::InputExtras for super::EditorExtras {
         resolver: &dyn crate::input::HighlightStyleResolver,
     ) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
         self.lsp.semantic_tokens_for_range(text, range, resolver)
+    }
+
+    fn occurrence_highlight_styles(
+        &self,
+        range: &std::ops::Range<usize>,
+        selection: gpui::Hsla,
+    ) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+        self.lsp
+            .document_highlights
+            .iter()
+            .filter(|(highlight, _)| highlight.start < range.end && highlight.end > range.start)
+            .map(|(highlight, kind)| {
+                // Writes read stronger than reads, both derived from the
+                // theme's selection colour so no new style knob is needed.
+                let background = if *kind == lsp_types::DocumentHighlightKind::WRITE {
+                    selection.opacity(0.9)
+                } else {
+                    selection.opacity(0.5)
+                };
+                (
+                    highlight.clone(),
+                    gpui::HighlightStyle {
+                        background_color: Some(background),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect()
     }
 
     fn document_color_swatches(

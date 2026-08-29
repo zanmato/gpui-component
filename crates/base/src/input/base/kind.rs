@@ -99,6 +99,17 @@ pub trait InputExtras: Default + 'static {
         Vec::new()
     }
 
+    /// Background styles for the occurrences of the symbol under the
+    /// cursor, when an LSP supplies them. `selection` is the theme's
+    /// selection colour, from which read/write intensities are derived.
+    fn occurrence_highlight_styles(
+        &self,
+        _range: &std::ops::Range<usize>,
+        _selection: gpui::Hsla,
+    ) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+        Vec::new()
+    }
+
     /// The symbol range the hover popover is anchored to.
     fn hover_symbol_range(&self) -> Option<std::ops::Range<usize>> {
         None
@@ -214,6 +225,14 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
     /// Ends an active snippet session. Returns whether one was active.
     fn end_snippet_session(_state: &mut InputBaseState<Self>) -> bool {
         false
+    }
+
+    /// Reacts to the cursor settling somewhere new, for cursor-anchored
+    /// language features such as occurrence highlights.
+    fn on_cursor_moved(
+        _state: &mut InputBaseState<Self>,
+        _cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
     }
 
     /// Hides an open signature-help popover. Returns whether one was open.

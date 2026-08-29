@@ -9,6 +9,7 @@ mod code_actions;
 mod completions;
 mod definitions;
 mod document_colors;
+mod document_highlights;
 mod hover;
 mod overlay;
 mod semantic_tokens;
@@ -20,6 +21,7 @@ pub use code_actions::*;
 pub use completions::*;
 pub use definitions::*;
 pub use document_colors::*;
+pub use document_highlights::*;
 pub use hover::*;
 pub use overlay::*;
 pub use semantic_tokens::*;
@@ -89,6 +91,8 @@ pub struct Lsp {
     pub definition_provider: Option<Rc<dyn DefinitionProvider>>,
     /// The signature help provider.
     pub signature_help_provider: Option<Rc<dyn SignatureHelpProvider>>,
+    /// The document highlight provider.
+    pub document_highlight_provider: Option<Rc<dyn DocumentHighlightProvider>>,
     /// The document color provider.
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
@@ -111,10 +115,14 @@ pub struct Lsp {
     /// names. Color is resolved from the name at paint time so theme switches
     /// take effect without a refetch.
     pub(crate) semantic_tokens: Vec<(lsp_types::Range, SharedString)>,
+    /// Occurrences of the symbol under the cursor, as resolved byte
+    /// ranges. Cleared on every edit.
+    pub(crate) document_highlights: Vec<(std::ops::Range<usize>, lsp_types::DocumentHighlightKind)>,
     pub(crate) _hover_task: Task<Result<()>>,
     pub(crate) _document_color_task: Task<()>,
     pub(crate) _semantic_tokens_task: Task<()>,
     pub(crate) _signature_help_task: Task<()>,
+    pub(crate) _document_highlight_task: Task<()>,
 }
 
 impl Default for Lsp {
@@ -125,6 +133,9 @@ impl Default for Lsp {
             hover_provider: None,
             definition_provider: None,
             signature_help_provider: None,
+            document_highlight_provider: None,
+            document_highlights: vec![],
+            _document_highlight_task: Task::ready(()),
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
@@ -179,6 +190,8 @@ impl Lsp {
         self._document_color_task = Task::ready(());
         self._semantic_tokens_task = Task::ready(());
         self._signature_help_task = Task::ready(());
+        self.document_highlights.clear();
+        self._document_highlight_task = Task::ready(());
     }
 }
 

@@ -1533,8 +1533,14 @@ impl<M: InputModeKind> TextElement<M> {
             styles.push(hover_style);
         }
 
+        // Occurrences of the symbol under the cursor, as background tints.
+        let occurrence_styles = state
+            .extras
+            .occurrence_highlight_styles(&visible_byte_range, state.editor_style.selection);
+
         // Compose tree-sitter, semantic, application, then diagnostic styles.
         styles = gpui::combine_highlights(custom_styles, styles).collect();
+        styles = gpui::combine_highlights(occurrence_styles, styles).collect();
         if !state.masked {
             styles = compose_decoration_collections(
                 styles,

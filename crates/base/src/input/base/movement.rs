@@ -73,6 +73,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.update_preferred_column();
         M::hide_context_menu(self, cx);
         M::clear_inline_completion(self, cx);
+        M::on_cursor_moved(self, cx);
         cx.notify()
     }
 
