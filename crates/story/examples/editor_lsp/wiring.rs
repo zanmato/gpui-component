@@ -5,9 +5,10 @@
 use anyhow::Result;
 use gpui::{App, Entity, SharedString, Task, Window};
 use gpui_component::input::{
-    CodeActionProvider, CompletionProvider, DefinitionProvider, DocumentColorProvider,
-    DocumentHighlightProvider, DocumentRangeSemanticTokensProvider, DocumentSymbolProvider,
-    EditorState, HoverProvider, ReferencesProvider, Rope, RopeExt, SignatureHelpProvider,
+    CodeActionProvider, CompletionProvider, DeclarationProvider, DefinitionProvider,
+    DocumentColorProvider, DocumentHighlightProvider, DocumentRangeSemanticTokensProvider,
+    DocumentSymbolProvider, EditorState, HoverProvider, ImplementationProvider, ReferencesProvider,
+    Rope, RopeExt, SignatureHelpProvider, TypeDefinitionProvider,
 };
 use lsp_types::{
     ClientCapabilities, CodeAction, CodeActionOrCommand, ColorInformation, CompletionContext,
@@ -66,6 +67,18 @@ pub fn client_capabilities() -> ClientCapabilities {
                 ..Default::default()
             }),
             definition: Some(lsp_types::GotoCapability {
+                link_support: Some(true),
+                ..Default::default()
+            }),
+            type_definition: Some(lsp_types::GotoCapability {
+                link_support: Some(true),
+                ..Default::default()
+            }),
+            implementation: Some(lsp_types::GotoCapability {
+                link_support: Some(true),
+                ..Default::default()
+            }),
+            declaration: Some(lsp_types::GotoCapability {
                 link_support: Some(true),
                 ..Default::default()
             }),
@@ -263,6 +276,31 @@ pub fn install_providers(
         }
         if truthy(&capabilities.document_symbol_provider) {
             lsp.document_symbol_provider = Some(providers.clone());
+        }
+        let goto_enabled = |simple: Option<bool>| simple.unwrap_or(true);
+        if let Some(caps) = &capabilities.type_definition_provider
+            && goto_enabled(match caps {
+                lsp_types::TypeDefinitionProviderCapability::Simple(enabled) => Some(*enabled),
+                _ => None,
+            })
+        {
+            lsp.type_definition_provider = Some(providers.clone());
+        }
+        if let Some(caps) = &capabilities.implementation_provider
+            && goto_enabled(match caps {
+                lsp_types::ImplementationProviderCapability::Simple(enabled) => Some(*enabled),
+                _ => None,
+            })
+        {
+            lsp.implementation_provider = Some(providers.clone());
+        }
+        if let Some(caps) = &capabilities.declaration_provider
+            && goto_enabled(match caps {
+                lsp_types::DeclarationCapability::Simple(enabled) => Some(*enabled),
+                _ => None,
+            })
+        {
+            lsp.declaration_provider = Some(providers.clone());
         }
         if capabilities.color_provider.is_some() {
             lsp.document_color_provider = Some(providers.clone());
@@ -467,17 +505,80 @@ impl DefinitionProvider for ServerProviders {
                 partial_result_params: Default::default(),
             },
         );
-        cx.spawn(async move |_| {
-            let links = match request.await? {
-                None => vec![],
-                Some(GotoDefinitionResponse::Scalar(location)) => vec![location_link(location)],
-                Some(GotoDefinitionResponse::Array(locations)) => {
-                    locations.into_iter().map(location_link).collect()
-                }
-                Some(GotoDefinitionResponse::Link(links)) => links,
-            };
-            Ok(links)
-        })
+        cx.spawn(async move |_| Ok(goto_links(request.await?)))
+    }
+}
+
+impl TypeDefinitionProvider for ServerProviders {
+    fn type_definitions(
+        &self,
+        text: &Rope,
+        offset: usize,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Vec<LocationLink>>> {
+        let request = self
+            .client
+            .request::<lsp_types::request::GotoTypeDefinition>(
+                lsp_types::request::GotoTypeDefinitionParams {
+                    text_document_position_params: self.document_position(text, offset),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            );
+        cx.spawn(async move |_| Ok(goto_links(request.await?)))
+    }
+}
+
+impl ImplementationProvider for ServerProviders {
+    fn implementations(
+        &self,
+        text: &Rope,
+        offset: usize,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Vec<LocationLink>>> {
+        let request = self
+            .client
+            .request::<lsp_types::request::GotoImplementation>(
+                lsp_types::request::GotoImplementationParams {
+                    text_document_position_params: self.document_position(text, offset),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                },
+            );
+        cx.spawn(async move |_| Ok(goto_links(request.await?)))
+    }
+}
+
+impl DeclarationProvider for ServerProviders {
+    fn declarations(
+        &self,
+        text: &Rope,
+        offset: usize,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Vec<LocationLink>>> {
+        let request = self.client.request::<lsp_types::request::GotoDeclaration>(
+            lsp_types::request::GotoDeclarationParams {
+                text_document_position_params: self.document_position(text, offset),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            },
+        );
+        cx.spawn(async move |_| Ok(goto_links(request.await?)))
+    }
+}
+
+/// Normalize the three shapes a goto response can take into links.
+fn goto_links(response: Option<GotoDefinitionResponse>) -> Vec<LocationLink> {
+    match response {
+        None => vec![],
+        Some(GotoDefinitionResponse::Scalar(location)) => vec![location_link(location)],
+        Some(GotoDefinitionResponse::Array(locations)) => {
+            locations.into_iter().map(location_link).collect()
+        }
+        Some(GotoDefinitionResponse::Link(links)) => links,
     }
 }
 

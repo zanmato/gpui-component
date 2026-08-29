@@ -202,6 +202,9 @@ impl InputModeKind for EditorMode {
             .on_action(
                 window.listener_for(entity, InputBaseState::on_action_toggle_document_symbols),
             )
+            .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_type_definition))
+            .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_implementation))
+            .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_declaration))
     }
 }
 

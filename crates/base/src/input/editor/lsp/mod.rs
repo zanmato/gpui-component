@@ -11,6 +11,7 @@ mod definitions;
 mod document_colors;
 mod document_highlights;
 mod document_symbols;
+mod goto;
 mod hover;
 mod overlay;
 mod references;
@@ -25,6 +26,7 @@ pub use definitions::*;
 pub use document_colors::*;
 pub use document_highlights::*;
 pub use document_symbols::*;
+pub use goto::*;
 pub use hover::*;
 pub use overlay::*;
 pub use references::*;
@@ -101,6 +103,12 @@ pub struct Lsp {
     pub references_provider: Option<Rc<dyn ReferencesProvider>>,
     /// The document symbol provider.
     pub document_symbol_provider: Option<Rc<dyn DocumentSymbolProvider>>,
+    /// The type definition provider.
+    pub type_definition_provider: Option<Rc<dyn TypeDefinitionProvider>>,
+    /// The implementation provider.
+    pub implementation_provider: Option<Rc<dyn ImplementationProvider>>,
+    /// The declaration provider.
+    pub declaration_provider: Option<Rc<dyn DeclarationProvider>>,
     /// The document color provider.
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
@@ -133,6 +141,7 @@ pub struct Lsp {
     pub(crate) _document_highlight_task: Task<()>,
     pub(crate) _references_task: Task<()>,
     pub(crate) _document_symbols_task: Task<()>,
+    pub(crate) _goto_task: Task<()>,
 }
 
 impl Default for Lsp {
@@ -150,6 +159,10 @@ impl Default for Lsp {
             _references_task: Task::ready(()),
             document_symbol_provider: None,
             _document_symbols_task: Task::ready(()),
+            type_definition_provider: None,
+            implementation_provider: None,
+            declaration_provider: None,
+            _goto_task: Task::ready(()),
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
@@ -208,6 +221,7 @@ impl Lsp {
         self._document_highlight_task = Task::ready(());
         self._references_task = Task::ready(());
         self._document_symbols_task = Task::ready(());
+        self._goto_task = Task::ready(());
     }
 }
 

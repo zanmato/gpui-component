@@ -117,16 +117,16 @@ impl InputBaseState<EditorMode> {
         cx: &mut Context<Self>,
     ) {
         let offset = self.cursor();
+        // The Cmd-hover cache answers instantly when it covers the cursor.
         if let Some((symbol_range, locations)) = self.extras.hover_definition.last_location.clone()
+            && (symbol_range.start..=symbol_range.end).contains(&offset)
         {
-            if !(symbol_range.start..=symbol_range.end).contains(&offset) {
-                return;
-            }
-
-            if let Some(location) = locations.first().cloned() {
-                self.go_to_definition(&location, window, cx);
-            }
+            self.navigate_to_links("Definitions", &locations, window, cx);
+            return;
         }
+
+        // Keyboard-invoked with no hover cache: fetch for the cursor.
+        self.go_to_definition_at_cursor(window, cx);
     }
 
     /// Return true if handled.
