@@ -26,13 +26,13 @@ pub use gpui_base::input::{
     InputHighlighter, InputHighlighterFactory, InputState, LocationsPickerState, Lsp, MaskPattern,
     MoveDown, MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveToEnd,
     MoveToEndOfLine, MoveToNextWord, MoveToPreviousWord, MoveToStart, MoveToStartOfLine, MoveUp,
-    Outdent, OutdentInline, Paste, PickerLocation, Point, Redo, ReferencesProvider, Rename,
-    RenamePrompt, RenamePromptState, RenameProvider, Replace, Rope, RopeExt, RopeLines, Search,
-    SelectAll, SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd, SelectToPreviousWordStart,
-    SelectToStart, SelectToStartOfLine, Selection, ShowCharacterPalette, ShowDocumentHandler,
-    SignatureHelpProvider, SignatureHelpState, TabSize, TextDecoration, TextDecorationCollection,
-    TextareaState, ToggleCodeActions, ToggleDocumentSymbols, ToggleSignatureHelp,
-    TypeDefinitionProvider, Undo, WrappingIndent,
+    OnTypeFormattingProvider, Outdent, OutdentInline, Paste, PickerLocation, Point, Redo,
+    ReferencesProvider, Rename, RenamePrompt, RenamePromptState, RenameProvider, Replace, Rope,
+    RopeExt, RopeLines, Search, SelectAll, SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd,
+    SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection, ShowCharacterPalette,
+    ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState, TabSize, TextDecoration,
+    TextDecorationCollection, TextareaState, ToggleCodeActions, ToggleDocumentSymbols,
+    ToggleSignatureHelp, TypeDefinitionProvider, Undo, WrappingIndent,
 };
 pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
 #[doc(hidden)]

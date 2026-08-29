@@ -8,8 +8,8 @@ use gpui_component::input::{
     CodeActionProvider, CompletionProvider, DeclarationProvider, DefinitionProvider,
     DocumentColorProvider, DocumentHighlightProvider, DocumentRangeSemanticTokensProvider,
     DocumentSymbolProvider, EditorState, FormattingProvider, HoverProvider, ImplementationProvider,
-    ReferencesProvider, RenameProvider, Rope, RopeExt, SignatureHelpProvider,
-    TypeDefinitionProvider,
+    OnTypeFormattingProvider, ReferencesProvider, RenameProvider, Rope, RopeExt,
+    SignatureHelpProvider, TypeDefinitionProvider,
 };
 use lsp_types::{
     ClientCapabilities, CodeAction, CodeActionOrCommand, ColorInformation, CompletionContext,
@@ -103,6 +103,9 @@ pub fn client_capabilities() -> ClientCapabilities {
             }),
             formatting: Some(lsp_types::DocumentFormattingClientCapabilities::default()),
             range_formatting: Some(lsp_types::DocumentRangeFormattingClientCapabilities::default()),
+            on_type_formatting: Some(
+                lsp_types::DocumentOnTypeFormattingClientCapabilities::default(),
+            ),
             color_provider: Some(lsp_types::DocumentColorClientCapabilities::default()),
             semantic_tokens: Some(lsp_types::SemanticTokensClientCapabilities {
                 requests: lsp_types::SemanticTokensClientCapabilitiesRequests {
@@ -196,6 +199,7 @@ pub struct ServerProviders {
     rename_prepare_supported: bool,
     format_supported: bool,
     range_format_supported: bool,
+    on_type_formatting_triggers: Vec<String>,
     semantic_tokens_legend: SemanticTokensLegend,
 }
 
@@ -255,6 +259,15 @@ pub fn install_providers(
         ),
         format_supported: truthy(&capabilities.document_formatting_provider),
         range_format_supported: truthy(&capabilities.document_range_formatting_provider),
+        on_type_formatting_triggers: capabilities
+            .document_on_type_formatting_provider
+            .as_ref()
+            .map(|options| {
+                std::iter::once(options.first_trigger_character.clone())
+                    .chain(options.more_trigger_character.clone().unwrap_or_default())
+                    .collect()
+            })
+            .unwrap_or_default(),
         semantic_tokens_legend: semantic_tokens
             .as_ref()
             .map(|(legend, _)| legend.clone())
@@ -300,6 +313,9 @@ pub fn install_providers(
             || truthy(&capabilities.document_range_formatting_provider)
         {
             lsp.formatting_provider = Some(providers.clone());
+        }
+        if capabilities.document_on_type_formatting_provider.is_some() {
+            lsp.on_type_formatting_provider = Some(providers.clone());
         }
         let goto_enabled = |simple: Option<bool>| simple.unwrap_or(true);
         if let Some(caps) = &capabilities.type_definition_provider
@@ -538,6 +554,31 @@ impl FormattingProvider for ServerProviders {
 
     fn supports_range_format(&self) -> bool {
         self.range_format_supported
+    }
+}
+
+impl OnTypeFormattingProvider for ServerProviders {
+    fn on_type_format(
+        &self,
+        text: &Rope,
+        offset: usize,
+        ch: &str,
+        options: lsp_types::FormattingOptions,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Option<Vec<lsp_types::TextEdit>>>> {
+        let request = self.client.request::<lsp_types::request::OnTypeFormatting>(
+            lsp_types::DocumentOnTypeFormattingParams {
+                text_document_position: self.document_position(text, offset),
+                ch: ch.to_string(),
+                options,
+            },
+        );
+        cx.spawn(async move |_| request.await)
+    }
+
+    fn trigger_characters(&self) -> Vec<String> {
+        self.on_type_formatting_triggers.clone()
     }
 }
 

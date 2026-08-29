@@ -126,6 +126,7 @@ impl InputModeKind for EditorMode {
     ) {
         state.handle_completion_trigger(range, text, window, cx);
         state.handle_signature_help_trigger(range, text, window, cx);
+        state.handle_on_type_formatting_trigger(range, text, window, cx);
     }
 
     fn clear_inline_completion(

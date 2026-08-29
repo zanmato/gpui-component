@@ -515,6 +515,66 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn on_type_formatting_uses_the_servers_trigger_characters(cx: &mut TestAppContext) {
+        let (server, client) = cx.update(|cx| {
+            FakeServer::start(
+                json!({
+                    "documentOnTypeFormattingProvider": {
+                        "firstTriggerCharacter": "}",
+                        "moreTriggerCharacter": [";"],
+                    },
+                }),
+                cx,
+            )
+        });
+        client.initialize(initialize_params()).await.unwrap();
+        server.handle("textDocument/onTypeFormatting", |_| json!([]));
+
+        let (editor, cx) = build_editor(cx);
+        let uri = document_uri();
+        let text = "func main() {}";
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value(text, window, cx);
+            });
+            install_providers(&client, &editor, &uri, cx);
+        });
+
+        let provider = cx.update(|_, cx| {
+            editor
+                .read(cx)
+                .lsp()
+                .on_type_formatting_provider
+                .clone()
+                .unwrap()
+        });
+        // Both declared trigger characters drive the editor-side check.
+        assert_eq!(provider.trigger_characters(), vec!["}", ";"]);
+
+        let task = cx.update(|window, cx| {
+            provider.on_type_format(
+                &Rope::from(text),
+                text.len(),
+                "}",
+                lsp_types::FormattingOptions {
+                    tab_size: 2,
+                    insert_spaces: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        task.await.expect("on-type format request succeeds");
+
+        let requests = server.received("textDocument/onTypeFormatting");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["params"]["ch"], json!("}"));
+        assert_eq!(requests[0]["params"]["position"]["character"], json!(14));
+        assert_eq!(requests[0]["params"]["options"]["tabSize"], json!(2));
+    }
+
+    #[gpui::test]
     async fn publish_diagnostics_reach_the_diagnostic_set(cx: &mut TestAppContext) {
         let (server, client) = cx.update(|cx| FakeServer::start(json!({}), cx));
         client.initialize(initialize_params()).await.unwrap();
