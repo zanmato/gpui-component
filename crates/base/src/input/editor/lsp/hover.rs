@@ -48,6 +48,7 @@ impl InputBaseState<EditorMode> {
         let mut symbol_range = self.text.word_range(offset).unwrap_or(offset..offset);
         let editor = cx.entity();
         let should_delay = self.extras.hover_popover.is_none();
+        let version = self.document_version;
         self.extras.lsp._hover_task = cx.spawn_in(window, async move |_, cx| {
             if should_delay {
                 cx.background_executor()
@@ -58,6 +59,9 @@ impl InputBaseState<EditorMode> {
             let result = task.await?;
 
             _ = editor.update(cx, |editor, cx| {
+                if editor.document_version != version {
+                    return;
+                }
                 match result {
                     Some(hover) => {
                         if let Some(range) = hover.range {
@@ -110,5 +114,91 @@ impl InputBaseState<EditorMode> {
         if changed {
             cx.notify();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::{EditorState, InputBaseState};
+    use crate::theme::Theme;
+    use gpui::{App, Entity, TestAppContext, VisualTestContext, prelude::*};
+    use std::rc::Rc;
+
+    struct TestRoot(Entity<InputBaseState<EditorMode>>);
+
+    impl Render for TestRoot {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            gpui::div().size_full().child(self.0.clone())
+        }
+    }
+
+    struct StaticHover;
+
+    impl HoverProvider for StaticHover {
+        fn hover(
+            &self,
+            _: &Rope,
+            _: usize,
+            _: &mut Window,
+            _: &mut App,
+        ) -> Task<Result<Option<lsp_types::Hover>>> {
+            Task::ready(Ok(Some(lsp_types::Hover {
+                contents: lsp_types::HoverContents::Scalar(lsp_types::MarkedString::String(
+                    "doc".into(),
+                )),
+                range: None,
+            })))
+        }
+    }
+
+    fn build_editor(
+        cx: &mut TestAppContext,
+    ) -> (Entity<InputBaseState<EditorMode>>, VisualTestContext) {
+        let mut editor = None;
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.set_global(Theme::default());
+                crate::input::init(cx);
+                editor = Some(cx.new(|cx| EditorState::new(window, cx)));
+                cx.new(|_| TestRoot(editor.clone().unwrap()))
+            })
+            .unwrap()
+        });
+        let cx = VisualTestContext::from_window(window.into(), cx);
+        (editor.unwrap(), cx)
+    }
+
+    #[gpui::test]
+    fn a_hover_response_against_an_edited_document_is_dropped(cx: &mut TestAppContext) {
+        let (editor, mut cx) = build_editor(cx);
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.set_value("hello world", window, cx);
+                editor.extras.lsp.hover_provider = Some(Rc::new(StaticHover));
+            });
+        });
+
+        // The document changes while the request is still waiting on its
+        // open delay: the response must not open a popover anchored to
+        // offsets of a text that no longer exists.
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| editor.handle_hover_popover(1, window, cx));
+        });
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| editor.insert("x", window, cx));
+        });
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(editor.read(cx).extras.hover_popover.is_none()));
+
+        // With no interleaved edit the same request lands normally.
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| editor.handle_hover_popover(1, window, cx));
+        });
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|_, cx| assert!(editor.read(cx).extras.hover_popover.is_some()));
     }
 }

@@ -54,7 +54,8 @@ impl InputModeKind for EditorMode {
         cx: &mut gpui::Context<InputBaseState<Self>>,
     ) {
         let text = state.text().clone();
-        state.extras.lsp.update(&text, window, cx);
+        let version = state.document_version();
+        state.extras.lsp.update(&text, version, window, cx);
     }
 
     fn accept_inline_completion(
