@@ -60,6 +60,46 @@ let decorations = editor.update(cx, |state, cx| {
 Keep the returned `TextDecorationCollection` alive while the decorations are
 needed. Its ranges follow subsequent text edits.
 
+## Language features (LSP)
+
+The editor speaks the Language Server Protocol through provider traits.
+Install providers on `EditorState::lsp_mut()` and the matching interactions
+light up; every slot left empty simply stays inert:
+
+```rust
+editor.update(cx, |state, cx| {
+    let lsp = state.lsp_mut();
+    lsp.set_document_uri("file:///src/main.go".parse().unwrap());
+    lsp.completion_provider = Some(my_completions);
+    lsp.hover_provider = Some(my_hover);
+    lsp.formatting_provider = Some(my_formatter);
+    // …definition, references, rename, signature help, document
+    // symbols, document highlights, inlay hints, code actions,
+    // semantic tokens, document colors, on-type formatting.
+});
+```
+
+Each provider is one trait with the shape of its LSP request —
+`CompletionProvider`, `HoverProvider`, `RenameProvider` with prepare
+support, `FormattingProvider` for document and range formatting,
+`InlayHintProvider`, and so on. Positions convert between byte offsets and
+UTF-16 `lsp_types::Position` via `RopeExt`, matching the protocol's
+mandatory encoding. Async responses are version-guarded: a reply that
+resolves against an already-edited document is dropped.
+
+The built-in keybindings: completion as you type, hover on rest, F12 goes
+to definition, Shift-F12 lists references, Cmd-F12 goes to implementation,
+Cmd-Shift-O opens the document outline, F2 renames, Shift-Alt-F formats,
+Cmd-. opens code actions, and Cmd-Shift-Space toggles signature help.
+Workspace edits — rename, code actions, `workspace/applyEdit` — apply
+atomically through `apply_workspace_edit`: one undo step, cursor preserved.
+
+A complete client — process spawn, JSON-RPC framing, capability
+negotiation, document sync — lives in the
+[`editor_lsp` example](https://github.com/longbridge/gpui-component/tree/main/crates/story/examples/editor_lsp),
+which wires every provider to a real gopls and is the reference for
+connecting your own server.
+
 ## Value and events
 
 ```rust

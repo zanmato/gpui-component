@@ -56,6 +56,39 @@ let decorations = editor.update(cx, |state, cx| {
 
 需要装饰存在多久，就应将返回的 `TextDecorationCollection` 保留多久；文本修改后，其 range 会自动跟随内容变化。
 
+## 语言功能（LSP）
+
+Editor 通过 provider trait 支持 Language Server Protocol。在
+`EditorState::lsp_mut()` 上安装 provider，对应的交互即会生效；未安装的槽位保持无效状态：
+
+```rust
+editor.update(cx, |state, cx| {
+    let lsp = state.lsp_mut();
+    lsp.set_document_uri("file:///src/main.go".parse().unwrap());
+    lsp.completion_provider = Some(my_completions);
+    lsp.hover_provider = Some(my_hover);
+    lsp.formatting_provider = Some(my_formatter);
+    // …definition、references、rename、signature help、document
+    // symbols、document highlights、inlay hints、code actions、
+    // semantic tokens、document colors、on-type formatting。
+});
+```
+
+每个 provider 都是一个与其 LSP 请求同构的 trait——`CompletionProvider`、
+`HoverProvider`、支持 prepare 的 `RenameProvider`、覆盖整篇文档与选区的
+`FormattingProvider`、`InlayHintProvider` 等。字节偏移与 UTF-16 的
+`lsp_types::Position` 之间通过 `RopeExt` 转换，符合协议规定的编码。异步响应带版本保护：针对已被编辑文档的过期响应会被丢弃。
+
+内置按键：输入时自动补全、悬停显示 hover，F12 跳转定义，Shift-F12
+列出引用，Cmd-F12 跳转实现，Cmd-Shift-O 打开文档大纲，F2 重命名，
+Shift-Alt-F 格式化，Cmd-. 打开 code actions，Cmd-Shift-Space 切换
+signature help。Workspace edit——rename、code actions、
+`workspace/applyEdit`——通过 `apply_workspace_edit` 原子应用：一步撤销，光标位置保持不变。
+
+完整的客户端实现——进程启动、JSON-RPC 帧解析、能力协商、文档同步——见
+[`editor_lsp` 示例](https://github.com/longbridge/gpui-component/tree/main/crates/story/examples/editor_lsp)，它将全部
+provider 接到真实的 gopls 上，是接入自有语言服务器的参考实现。
+
 ## 值与事件
 
 ```rust

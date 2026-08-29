@@ -8,11 +8,49 @@
 //!
 //! The harness spawns gopls over the embedded `testdata/` Go module,
 //! negotiates UTF-16 positions, keeps the document synchronized with full
-//! `didChange` notifications, and wires the editor's provider traits —
-//! completion, hover, go-to-definition, code actions, semantic tokens —
-//! to the corresponding language server requests. Diagnostics are pushed
-//! into the editor as they arrive and `workspace/applyEdit` requests
-//! mutate the buffer.
+//! `didChange` notifications, and wires every editor provider trait to the
+//! corresponding language server request, gated on the capabilities the
+//! server reports. Diagnostics are pushed into the editor as they arrive
+//! and `workspace/applyEdit` requests mutate the buffer.
+//!
+//! # Proof checklist
+//!
+//! Walking this in order exercises the whole LSP surface end-to-end:
+//!
+//! 1.  Lifecycle: the status line reaches "gopls ready".
+//! 2.  Diagnostics: delete a `)` — a squiggle appears with a hover
+//!     popover; restore it — the squiggle clears.
+//! 3.  Positions: hover a symbol on the line containing `世界🌍` — the
+//!     right symbol is hit (UTF-16 conversion).
+//! 4.  Completion: type `fmt.Pr` — a menu opens; arrowing through items
+//!     fills documentation lazily (resolve); confirming applies any
+//!     auto-import (additionalTextEdits) atomically — one Undo reverts
+//!     both.
+//! 5.  Snippets: confirm a function completion — the first placeholder is
+//!     selected, Tab walks the stops, Escape ends the session.
+//! 6.  Signature help: type `fmt.Fprintf(` — a popover shows the active
+//!     parameter emphasized; `,` advances it; Escape dismisses.
+//! 7.  Document highlight: click a variable — its occurrences tint, writes
+//!     stronger than reads; typing clears them.
+//! 8.  References: Shift-F12 on a symbol — the locations picker opens;
+//!     Enter jumps.
+//! 9.  Document symbols: Cmd-Shift-O — the outline opens, nested symbols
+//!     indented; Enter jumps to the declaration name.
+//! 10. Goto family: F12 goes to definition; Cmd-F12 on `Speak` in the
+//!     `Speaker` interface jumps to Greeter's implementation.
+//! 11. Rename: F2 on a symbol prefills the validated name; Enter renames
+//!     every occurrence as one undo step; F2 on a keyword does nothing.
+//! 12. Formatting: Shift-Alt-F on the mis-formatted `shout` runs gofmt
+//!     with the cursor kept on the same character; with a selection only
+//!     the selected range is formatted.
+//! 13. Inlay hints: parameter-name and variable-type hints render inline
+//!     as muted text the code shifts around, and refresh after edits.
+//! 14. Code actions: Cmd-. on the unused `errors` import offers to remove
+//!     it; applying it edits the buffer through the workspace-edit path.
+//! 15. Semantic tokens and document colors keep working through the real
+//!     client.
+//! 16. Shutdown: closing the window runs shutdown/exit and the gopls
+//!     process exits.
 
 mod client;
 mod transport;
@@ -138,6 +176,17 @@ impl Example {
             process_id: Some(std::process::id()),
             root_uri: Some(root_uri.clone()),
             capabilities: client_capabilities(),
+            // gopls only sends inlay hints that are switched on explicitly.
+            initialization_options: Some(serde_json::json!({
+                "hints": {
+                    "assignVariableTypes": true,
+                    "compositeLiteralFields": true,
+                    "constantValues": true,
+                    "functionTypeParameters": true,
+                    "parameterNames": true,
+                    "rangeVariableTypes": true,
+                },
+            })),
             workspace_folders: Some(vec![lsp_types::WorkspaceFolder {
                 uri: root_uri,
                 name: "testdata".into(),

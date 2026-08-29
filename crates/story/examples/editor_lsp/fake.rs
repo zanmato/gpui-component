@@ -671,6 +671,105 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn full_lifecycle_from_open_to_shutdown(cx: &mut TestAppContext) {
+        let (server, client) = cx.update(|cx| {
+            FakeServer::start(
+                json!({
+                    "hoverProvider": true,
+                    "definitionProvider": true,
+                    "referencesProvider": true,
+                    "documentSymbolProvider": true,
+                    "documentFormattingProvider": true,
+                    "inlayHintProvider": true,
+                    "renameProvider": { "prepareProvider": true },
+                }),
+                cx,
+            )
+        });
+        client.initialize(initialize_params()).await.unwrap();
+        server.handle(
+            "textDocument/hover",
+            |_| json!({ "contents": "Greeter says hello." }),
+        );
+        server.handle("textDocument/formatting", |_| json!([]));
+
+        let (editor, cx) = build_editor(cx);
+        let uri = document_uri();
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value("package main", window, cx);
+                notify_document_opened(&client, &uri, "go", state);
+            });
+            install_providers(&client, &editor, &uri, cx);
+        });
+
+        // Every advertised capability got its provider slot; the rest
+        // stayed unwired.
+        cx.update(|_, cx| {
+            let state = editor.read(cx);
+            assert!(state.lsp().hover_provider.is_some());
+            assert!(state.lsp().definition_provider.is_some());
+            assert!(state.lsp().references_provider.is_some());
+            assert!(state.lsp().document_symbol_provider.is_some());
+            assert!(state.lsp().formatting_provider.is_some());
+            assert!(state.lsp().inlay_hint_provider.is_some());
+            assert!(state.lsp().rename_provider.is_some());
+            assert!(state.lsp().completion_provider.is_none());
+            assert!(state.lsp().signature_help_provider.is_none());
+        });
+
+        // Open, request, edit, request again: versions stay monotonic and
+        // the requests round-trip.
+        let task = cx.update(|window, cx| {
+            let provider = editor.read(cx).lsp().hover_provider.clone().unwrap();
+            provider.hover(&Rope::from("package main"), 8, window, cx)
+        });
+        assert!(task.await.expect("hover succeeds").is_some());
+
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value("package main\n\nfunc main() {}", window, cx);
+                notify_document_changed(&client, &uri, state);
+            });
+        });
+        let task = cx.update(|window, cx| {
+            let provider = editor.read(cx).lsp().formatting_provider.clone().unwrap();
+            provider.format(
+                &Rope::from("package main\n\nfunc main() {}"),
+                lsp_types::FormattingOptions {
+                    tab_size: 4,
+                    insert_spaces: false,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        task.await.expect("format succeeds");
+        cx.run_until_parked();
+
+        let opens = server.received("textDocument/didOpen");
+        let changes = server.received("textDocument/didChange");
+        assert_eq!(opens.len(), 1);
+        assert_eq!(changes.len(), 1);
+        assert!(
+            changes[0]["params"]["textDocument"]["version"]
+                .as_i64()
+                .unwrap()
+                > opens[0]["params"]["textDocument"]["version"]
+                    .as_i64()
+                    .unwrap()
+        );
+
+        // The shutdown sequence: the request is answered, then the exit
+        // notification follows.
+        client.shutdown().await.expect("shutdown succeeds");
+        cx.run_until_parked();
+        assert_eq!(server.received("shutdown").len(), 1);
+        assert_eq!(server.received("exit").len(), 1);
+    }
+
+    #[gpui::test]
     async fn apply_edit_requests_mutate_the_buffer_and_confirm(cx: &mut TestAppContext) {
         let (server, client) = cx.update(|cx| FakeServer::start(json!({}), cx));
         client.initialize(initialize_params()).await.unwrap();
