@@ -110,6 +110,7 @@ actions!(
         GoToImplementation,
         GoToDeclaration,
         Rename,
+        Format,
         Search,
         Replace,
         GoToDefinition,
@@ -270,6 +271,7 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("shift-f12", FindAllReferences, Some(CONTEXT)),
         KeyBinding::new("f12", GoToDefinition, Some(CONTEXT)),
         KeyBinding::new("f2", Rename, Some(CONTEXT)),
+        KeyBinding::new("shift-alt-f", Format, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-f12", GoToImplementation, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]

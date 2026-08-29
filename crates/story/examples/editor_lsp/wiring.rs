@@ -7,8 +7,9 @@ use gpui::{App, Entity, SharedString, Task, Window};
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, DeclarationProvider, DefinitionProvider,
     DocumentColorProvider, DocumentHighlightProvider, DocumentRangeSemanticTokensProvider,
-    DocumentSymbolProvider, EditorState, HoverProvider, ImplementationProvider, ReferencesProvider,
-    RenameProvider, Rope, RopeExt, SignatureHelpProvider, TypeDefinitionProvider,
+    DocumentSymbolProvider, EditorState, FormattingProvider, HoverProvider, ImplementationProvider,
+    ReferencesProvider, RenameProvider, Rope, RopeExt, SignatureHelpProvider,
+    TypeDefinitionProvider,
 };
 use lsp_types::{
     ClientCapabilities, CodeAction, CodeActionOrCommand, ColorInformation, CompletionContext,
@@ -100,6 +101,8 @@ pub fn client_capabilities() -> ClientCapabilities {
                 prepare_support: Some(true),
                 ..Default::default()
             }),
+            formatting: Some(lsp_types::DocumentFormattingClientCapabilities::default()),
+            range_formatting: Some(lsp_types::DocumentRangeFormattingClientCapabilities::default()),
             color_provider: Some(lsp_types::DocumentColorClientCapabilities::default()),
             semantic_tokens: Some(lsp_types::SemanticTokensClientCapabilities {
                 requests: lsp_types::SemanticTokensClientCapabilitiesRequests {
@@ -191,6 +194,8 @@ pub struct ServerProviders {
     signature_help_triggers: Vec<String>,
     signature_help_retriggers: Vec<String>,
     rename_prepare_supported: bool,
+    format_supported: bool,
+    range_format_supported: bool,
     semantic_tokens_legend: SemanticTokensLegend,
 }
 
@@ -248,6 +253,8 @@ pub fn install_providers(
             &capabilities.rename_provider,
             Some(lsp_types::OneOf::Right(options)) if options.prepare_provider == Some(true)
         ),
+        format_supported: truthy(&capabilities.document_formatting_provider),
+        range_format_supported: truthy(&capabilities.document_range_formatting_provider),
         semantic_tokens_legend: semantic_tokens
             .as_ref()
             .map(|(legend, _)| legend.clone())
@@ -288,6 +295,11 @@ pub fn install_providers(
         }
         if truthy(&capabilities.rename_provider) {
             lsp.rename_provider = Some(providers.clone());
+        }
+        if truthy(&capabilities.document_formatting_provider)
+            || truthy(&capabilities.document_range_formatting_provider)
+        {
+            lsp.formatting_provider = Some(providers.clone());
         }
         let goto_enabled = |simple: Option<bool>| simple.unwrap_or(true);
         if let Some(caps) = &capabilities.type_definition_provider
@@ -473,6 +485,59 @@ impl RenameProvider for ServerProviders {
 
     fn supports_prepare(&self) -> bool {
         self.rename_prepare_supported
+    }
+}
+
+impl FormattingProvider for ServerProviders {
+    fn format(
+        &self,
+        _text: &Rope,
+        options: lsp_types::FormattingOptions,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Option<Vec<lsp_types::TextEdit>>>> {
+        let request = self.client.request::<lsp_types::request::Formatting>(
+            lsp_types::DocumentFormattingParams {
+                text_document: TextDocumentIdentifier {
+                    uri: self.uri.clone(),
+                },
+                options,
+                work_done_progress_params: Default::default(),
+            },
+        );
+        cx.spawn(async move |_| request.await)
+    }
+
+    fn range_format(
+        &self,
+        text: &Rope,
+        range: Range<usize>,
+        options: lsp_types::FormattingOptions,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Option<Vec<lsp_types::TextEdit>>>> {
+        let request = self.client.request::<lsp_types::request::RangeFormatting>(
+            lsp_types::DocumentRangeFormattingParams {
+                text_document: TextDocumentIdentifier {
+                    uri: self.uri.clone(),
+                },
+                range: lsp_types::Range {
+                    start: text.offset_to_position(range.start),
+                    end: text.offset_to_position(range.end),
+                },
+                options,
+                work_done_progress_params: Default::default(),
+            },
+        );
+        cx.spawn(async move |_| request.await)
+    }
+
+    fn supports_format(&self) -> bool {
+        self.format_supported
+    }
+
+    fn supports_range_format(&self) -> bool {
+        self.range_format_supported
     }
 }
 

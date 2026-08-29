@@ -455,6 +455,66 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn formatting_requests_carry_tab_options_and_ranges(cx: &mut TestAppContext) {
+        let (server, client) = cx.update(|cx| {
+            FakeServer::start(
+                json!({
+                    "documentFormattingProvider": true,
+                    "documentRangeFormattingProvider": true,
+                }),
+                cx,
+            )
+        });
+        client.initialize(initialize_params()).await.unwrap();
+        server.handle("textDocument/formatting", |_| json!([]));
+        server.handle("textDocument/rangeFormatting", |_| json!([]));
+
+        let (editor, cx) = build_editor(cx);
+        let uri = document_uri();
+        let text = "hello world";
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value(text, window, cx);
+            });
+            install_providers(&client, &editor, &uri, cx);
+        });
+
+        let provider =
+            cx.update(|_, cx| editor.read(cx).lsp().formatting_provider.clone().unwrap());
+        assert!(provider.supports_format());
+        assert!(provider.supports_range_format());
+
+        let options = lsp_types::FormattingOptions {
+            tab_size: 4,
+            insert_spaces: false,
+            ..Default::default()
+        };
+        let task =
+            cx.update(|window, cx| provider.format(&Rope::from(text), options.clone(), window, cx));
+        task.await.expect("format request succeeds");
+
+        let requests = server.received("textDocument/formatting");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["params"]["options"]["tabSize"], json!(4));
+        assert_eq!(
+            requests[0]["params"]["options"]["insertSpaces"],
+            json!(false)
+        );
+
+        // Range formatting converts the byte range to UTF-16 positions.
+        let task = cx.update(|window, cx| {
+            provider.range_format(&Rope::from(text), 6..11, options, window, cx)
+        });
+        task.await.expect("range format request succeeds");
+
+        let requests = server.received("textDocument/rangeFormatting");
+        assert_eq!(requests.len(), 1);
+        let range = &requests[0]["params"]["range"];
+        assert_eq!(range["start"]["character"], json!(6));
+        assert_eq!(range["end"]["character"], json!(11));
+    }
+
+    #[gpui::test]
     async fn publish_diagnostics_reach_the_diagnostic_set(cx: &mut TestAppContext) {
         let (server, client) = cx.update(|cx| FakeServer::start(json!({}), cx));
         client.initialize(initialize_params()).await.unwrap();

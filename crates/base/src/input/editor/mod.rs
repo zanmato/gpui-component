@@ -206,6 +206,7 @@ impl InputModeKind for EditorMode {
             .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_implementation))
             .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_declaration))
             .on_action(window.listener_for(entity, InputBaseState::on_action_rename))
+            .on_action(window.listener_for(entity, InputBaseState::on_action_format))
     }
 }
 

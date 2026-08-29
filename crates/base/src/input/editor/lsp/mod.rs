@@ -11,6 +11,7 @@ mod definitions;
 mod document_colors;
 mod document_highlights;
 mod document_symbols;
+mod formatting;
 mod goto;
 mod hover;
 mod overlay;
@@ -27,6 +28,7 @@ pub use definitions::*;
 pub use document_colors::*;
 pub use document_highlights::*;
 pub use document_symbols::*;
+pub use formatting::*;
 pub use goto::*;
 pub use hover::*;
 pub use overlay::*;
@@ -113,6 +115,8 @@ pub struct Lsp {
     pub declaration_provider: Option<Rc<dyn DeclarationProvider>>,
     /// The rename provider.
     pub rename_provider: Option<Rc<dyn RenameProvider>>,
+    /// The document and range formatting provider.
+    pub formatting_provider: Option<Rc<dyn FormattingProvider>>,
     /// The document color provider.
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
@@ -147,6 +151,7 @@ pub struct Lsp {
     pub(crate) _document_symbols_task: Task<()>,
     pub(crate) _goto_task: Task<()>,
     pub(crate) _rename_task: Task<()>,
+    pub(crate) _format_task: Task<()>,
 }
 
 impl Default for Lsp {
@@ -170,6 +175,8 @@ impl Default for Lsp {
             _goto_task: Task::ready(()),
             rename_provider: None,
             _rename_task: Task::ready(()),
+            formatting_provider: None,
+            _format_task: Task::ready(()),
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
@@ -230,6 +237,7 @@ impl Lsp {
         self._document_symbols_task = Task::ready(());
         self._goto_task = Task::ready(());
         self._rename_task = Task::ready(());
+        self._format_task = Task::ready(());
     }
 }
 
