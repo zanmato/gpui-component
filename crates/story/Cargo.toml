@@ -62,6 +62,14 @@ gtk = { version = "0.18" }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+piper = "0.2"
+
+# The editor_lsp example carries its own protocol tests against an
+# in-process fake language server; opt its target into the test harness.
+[[example]]
+name = "editor_lsp"
+path = "examples/editor_lsp/main.rs"
+test = true
 
 [lints]
 workspace = true
