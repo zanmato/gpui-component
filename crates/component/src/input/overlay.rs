@@ -6,7 +6,9 @@ use ropey::Rope;
 
 use super::{
     InputBaseState, InputModeKind,
-    popovers::{CodeActionMenu, CompletionMenu, DiagnosticPopover, HoverPopover},
+    popovers::{
+        CodeActionMenu, CompletionMenu, DiagnosticPopover, HoverPopover, SignatureHelpPopover,
+    },
     search::SearchPanel,
 };
 use gpui_base::input::CompletionHighlighter;
@@ -67,10 +69,12 @@ struct OverlaySignature {
 pub(crate) struct LspOverlays {
     completion: Entity<CompletionMenu>,
     code_actions: Entity<CodeActionMenu>,
+    signature_help: Entity<SignatureHelpPopover>,
     hover: Option<Entity<HoverPopover>>,
     diagnostic: Option<Entity<DiagnosticPopover>>,
     completion_signature: OverlaySignature,
     code_action_signature: OverlaySignature,
+    signature_help_signature: OverlaySignature,
     hover_signature: Option<std::ops::Range<usize>>,
     diagnostic_signature: Option<std::rc::Rc<gpui_base::input::DiagnosticEntry>>,
     /// Highlighter last copied onto the completion menu.
@@ -89,6 +93,7 @@ pub(crate) struct LspSnapshot {
     completion: OverlaySignature,
     completion_start: Option<usize>,
     code_action: OverlaySignature,
+    signature_help: OverlaySignature,
     hover: Option<std::ops::Range<usize>>,
     diagnostic: Option<std::rc::Rc<gpui_base::input::DiagnosticEntry>>,
     cursor: usize,
@@ -98,6 +103,7 @@ impl LspSnapshot {
     fn has_overlay(&self) -> bool {
         self.completion.open
             || self.code_action.open
+            || self.signature_help.open
             || self.hover.is_some()
             || self.diagnostic.is_some()
     }
@@ -179,6 +185,10 @@ impl OverlayMode for crate::input::EditorMode {
                 open: code_actions.open,
                 revision: code_actions.revision(),
             },
+            signature_help: OverlaySignature {
+                open: state.signature_help_state().help.is_some(),
+                revision: state.signature_help_state().revision(),
+            },
             hover: state
                 .hover_popover()
                 .map(|popover| popover.symbol_range.clone()),
@@ -195,10 +205,12 @@ impl OverlayMode for crate::input::EditorMode {
         Some(LspOverlays {
             completion: CompletionMenu::new(state.clone(), window, cx),
             code_actions: CodeActionMenu::new(state.clone(), window, cx),
+            signature_help: SignatureHelpPopover::new(state.clone(), window, cx),
             hover: None,
             diagnostic: None,
             completion_signature: OverlaySignature::default(),
             code_action_signature: OverlaySignature::default(),
+            signature_help_signature: OverlaySignature::default(),
             hover_signature: None,
             diagnostic_signature: None,
             completion_highlight: None,
@@ -260,6 +272,18 @@ impl OverlayMode for crate::input::EditorMode {
                 } else {
                     menu.hide(cx);
                 }
+            });
+        }
+
+        if snapshot.signature_help != lsp.signature_help_signature {
+            lsp.signature_help_signature = OverlaySignature {
+                open: snapshot.signature_help.open,
+                revision: snapshot.signature_help.revision,
+            };
+            let help = state.read(cx).signature_help_state().help.clone();
+            lsp.signature_help.update(cx, |popover, cx| match help {
+                Some(help) => popover.show(help, cx),
+                None => popover.hide(cx),
             });
         }
 
@@ -399,6 +423,9 @@ impl<M: OverlayMode> InputOverlayHost<M> {
             }
             if snapshot.code_action.open {
                 floating.push(lsp.code_actions.clone().into_any_element());
+            }
+            if snapshot.signature_help.open {
+                floating.push(lsp.signature_help.clone().into_any_element());
             }
             if let Some(hover) = lsp.hover.as_ref() {
                 floating.push(hover.clone().into_any_element());
