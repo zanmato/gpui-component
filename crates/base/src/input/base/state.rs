@@ -285,6 +285,8 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) focus_handle: FocusHandle,
     pub(super) mode: LayoutMode,
     pub(super) text: Rope,
+    /// Monotonic version of `text`, see [`Self::document_version`].
+    pub(super) document_version: u64,
     pub(super) display_map: DisplayMap,
     pub(super) undo_manager: UndoManager,
     pub(super) search_session: super::SearchSession,
@@ -615,6 +617,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             extras: M::Extras::default(),
             focus_handle: focus_handle.clone(),
             text: "".into(),
+            document_version: 0,
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
             search_session: super::SearchSession::default(),
             searchable: false,
@@ -1110,6 +1113,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub fn default_value(mut self, value: impl Into<SharedString>) -> Self {
         let text: SharedString = value.into();
         self.text = Rope::from(self.normalize_input(&text).as_ref());
+        self.document_version += 1;
         if let Some(diagnostics) = self.mode.diagnostics_mut() {
             diagnostics.reset(&self.text)
         }
@@ -2068,6 +2072,17 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.undo_manager.set_ignoring(false);
     }
 
+    /// Monotonically increasing version of the document text.
+    ///
+    /// Bumped on every text change: typing, IME commits, programmatic
+    /// replaces, and undo/redo. Asynchronous language requests capture the
+    /// version when they are issued and discard responses that resolve
+    /// against a newer document. It is also suitable as the version number
+    /// for `textDocument/didChange` notifications.
+    pub fn document_version(&self) -> u64 {
+        self.document_version
+    }
+
     /// Get byte offset of the cursor.
     ///
     /// The offset is the UTF-8 offset.
@@ -2793,6 +2808,8 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             }
         }
 
+        self.document_version += 1;
+
         if mask_changed {
             // Masking rewrites the whole document, so ranges recorded against
             // the old text no longer point at anything.
@@ -2919,6 +2936,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             }
         }
 
+        self.document_version += 1;
         M::adjust_annotations(self, &range, new_text.len());
         if let Some(diagnostics) = self.mode.diagnostics_mut() {
             diagnostics.reset(&self.text)
@@ -3273,6 +3291,43 @@ mod tests {
                 f(crate::input::InputState::new(window, cx))
             })
         }
+    }
+
+    #[gpui::test]
+    fn document_version_bumps_on_every_text_change(cx: &mut TestAppContext) {
+        let input_view = InputView::<InputMode>::build(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        let version_of = |cx: &mut VisualTestContext| {
+            let input = input.clone();
+            cx.update(|_, cx| input.read(cx).document_version())
+        };
+
+        let initial = version_of(&mut cx);
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.set_value("hello", window, cx));
+        });
+        let after_set = version_of(&mut cx);
+        assert!(after_set > initial);
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.insert(" world", window, cx));
+        });
+        let after_insert = version_of(&mut cx);
+        assert!(after_insert > after_set);
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.undo(&Undo, window, cx));
+        });
+        let after_undo = version_of(&mut cx);
+        assert!(after_undo > after_insert);
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| state.redo(&Redo, window, cx));
+        });
+        let after_redo = version_of(&mut cx);
+        assert!(after_redo > after_undo);
     }
 
     #[gpui::test]
