@@ -116,6 +116,18 @@ impl FakeServer {
             .collect()
     }
 
+    /// The method names of every request and notification received, in
+    /// arrival order — for asserting cross-method ordering.
+    pub fn received_methods(&self) -> Vec<String> {
+        self.received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|message| message.get("method").and_then(Value::as_str))
+            .map(str::to_string)
+            .collect()
+    }
+
     /// Every response (a message without a method) the client sent back.
     pub fn received_responses(&self) -> Vec<Value> {
         self.received
@@ -667,6 +679,77 @@ mod tests {
             assert_eq!(diagnostics.len(), 1);
             let entry = diagnostics.iter().next().unwrap();
             assert_eq!(entry.diagnostic.message, "expected declaration");
+        });
+    }
+
+    #[gpui::test]
+    async fn typing_syncs_the_document_before_the_completion_request(cx: &mut TestAppContext) {
+        let (server, client) =
+            cx.update(|cx| FakeServer::start(json!({ "completionProvider": {} }), cx));
+        client.initialize(initialize_params()).await.unwrap();
+        server.handle(
+            "textDocument/completion",
+            |_| json!([{ "label": "Println" }]),
+        );
+
+        let (editor, cx) = build_editor(cx);
+        let uri = document_uri();
+        let _subscription = cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value("fmt.Pr", window, cx);
+                state.set_selected_range(6..6, cx);
+                notify_document_opened(&client, &uri, "go", state);
+            });
+            install_providers(&client, &editor, &uri, cx);
+            // The example forwards every buffer change, like main.rs does.
+            cx.subscribe(&editor, {
+                let client = client.clone();
+                let uri = uri.clone();
+                move |editor, event: &gpui_component::input::InputEvent, cx| {
+                    if matches!(event, gpui_component::input::InputEvent::Change) {
+                        notify_document_changed(&client, &uri, editor.read(cx));
+                    }
+                }
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(server.received("textDocument/didOpen").len(), 1);
+
+        // Typing a character fires the completion request from inside the
+        // edit; the didChange describing that edit must reach the server
+        // first, or it resolves the position against a stale document.
+        cx.update(|window, cx| {
+            use gpui::Focusable as _;
+            editor.read(cx).focus_handle(cx).focus(window, cx);
+            editor.update(cx, |state, cx| {
+                use gpui::EntityInputHandler as _;
+                state.replace_text_in_range(Some(6..6), "i", window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        let methods = server.received_methods();
+        let change_at = methods
+            .iter()
+            .position(|method| method == "textDocument/didChange")
+            .expect("didChange was sent");
+        let completion_at = methods
+            .iter()
+            .position(|method| method == "textDocument/completion")
+            .expect("completion was requested");
+        assert!(
+            change_at < completion_at,
+            "didChange must precede the completion it positions into, got {methods:?}"
+        );
+
+        let completions = server.received("textDocument/completion");
+        assert_eq!(
+            completions[0]["params"]["position"],
+            json!({ "line": 0, "character": 7 })
+        );
+        // The scripted response opened the menu.
+        cx.update(|_, cx| {
+            assert!(editor.read(cx).completion_menu_state().open);
         });
     }
 

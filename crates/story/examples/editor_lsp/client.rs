@@ -119,6 +119,13 @@ impl LspClient {
     }
 
     /// Send a request; the returned future resolves with the typed result.
+    ///
+    /// The message is written when the future is first polled, not when it
+    /// is created. Providers fire requests from inside an edit, before the
+    /// `InputEvent::Change` subscription has sent the `didChange` for that
+    /// edit; deferring the write to the next executor turn — after the
+    /// update's effects have flushed — keeps the document sync ahead of
+    /// every request that positions into it.
     pub fn request<R: lsp_types::request::Request>(
         &self,
         params: R::Params,
@@ -128,15 +135,16 @@ impl LspClient {
 
         let (tx, rx) = async_channel::bounded(1);
         self.state.pending.borrow_mut().insert(id, tx);
-        let enqueued = self.send(json!({
+        let message = json!({
             "jsonrpc": "2.0",
             "id": id,
             "method": R::METHOD,
             "params": params,
-        }));
+        });
 
+        let this = self.clone();
         async move {
-            enqueued?;
+            this.send(message)?;
             let value = rx
                 .recv()
                 .await
