@@ -7,7 +7,7 @@ use gpui::{App, Entity, SharedString, Task, Window};
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, DefinitionProvider, DocumentColorProvider,
     DocumentHighlightProvider, DocumentRangeSemanticTokensProvider, EditorState, HoverProvider,
-    Rope, RopeExt, SignatureHelpProvider,
+    ReferencesProvider, Rope, RopeExt, SignatureHelpProvider,
 };
 use lsp_types::{
     ClientCapabilities, CodeAction, CodeActionOrCommand, ColorInformation, CompletionContext,
@@ -78,6 +78,7 @@ pub fn client_capabilities() -> ClientCapabilities {
                 ..Default::default()
             }),
             document_highlight: Some(lsp_types::DocumentHighlightClientCapabilities::default()),
+            references: Some(lsp_types::ReferenceClientCapabilities::default()),
             color_provider: Some(lsp_types::DocumentColorClientCapabilities::default()),
             semantic_tokens: Some(lsp_types::SemanticTokensClientCapabilities {
                 requests: lsp_types::SemanticTokensClientCapabilitiesRequests {
@@ -253,6 +254,9 @@ pub fn install_providers(
         if truthy(&capabilities.document_highlight_provider) {
             lsp.document_highlight_provider = Some(providers.clone());
         }
+        if truthy(&capabilities.references_provider) {
+            lsp.references_provider = Some(providers.clone());
+        }
         if capabilities.color_provider.is_some() {
             lsp.document_color_provider = Some(providers.clone());
         }
@@ -373,6 +377,29 @@ impl SignatureHelpProvider for ServerProviders {
 
     fn retrigger_characters(&self) -> Vec<String> {
         self.signature_help_retriggers.clone()
+    }
+}
+
+impl ReferencesProvider for ServerProviders {
+    fn references(
+        &self,
+        text: &Rope,
+        offset: usize,
+        include_declaration: bool,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Vec<lsp_types::Location>>> {
+        let request =
+            self.client
+                .request::<lsp_types::request::References>(lsp_types::ReferenceParams {
+                    text_document_position: self.document_position(text, offset),
+                    work_done_progress_params: Default::default(),
+                    partial_result_params: Default::default(),
+                    context: lsp_types::ReferenceContext {
+                        include_declaration,
+                    },
+                });
+        cx.spawn(async move |_| Ok(request.await?.unwrap_or_default()))
     }
 }
 

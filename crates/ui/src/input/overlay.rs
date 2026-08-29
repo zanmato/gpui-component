@@ -6,7 +6,8 @@ use ropey::Rope;
 use super::{
     InputBaseState, InputModeKind,
     popovers::{
-        CodeActionMenu, CompletionMenu, DiagnosticPopover, HoverPopover, SignatureHelpPopover,
+        CodeActionMenu, CompletionMenu, DiagnosticPopover, HoverPopover, LocationsPicker,
+        SignatureHelpPopover,
     },
     search::SearchPanel,
 };
@@ -52,11 +53,13 @@ pub(crate) struct LspOverlays {
     completion: Entity<CompletionMenu>,
     code_actions: Entity<CodeActionMenu>,
     signature_help: Entity<SignatureHelpPopover>,
+    locations_picker: Entity<LocationsPicker>,
     hover: Option<Entity<HoverPopover>>,
     diagnostic: Option<Entity<DiagnosticPopover>>,
     completion_signature: OverlaySignature,
     code_action_signature: OverlaySignature,
     signature_help_signature: OverlaySignature,
+    locations_picker_signature: OverlaySignature,
     hover_signature: Option<std::ops::Range<usize>>,
     diagnostic_signature: Option<std::rc::Rc<gpui_base::input::DiagnosticEntry>>,
 }
@@ -71,6 +74,7 @@ pub(crate) struct LspSnapshot {
     completion_start: Option<usize>,
     code_action: OverlaySignature,
     signature_help: OverlaySignature,
+    locations_picker: OverlaySignature,
     hover: Option<std::ops::Range<usize>>,
     diagnostic: Option<std::rc::Rc<gpui_base::input::DiagnosticEntry>>,
     cursor: usize,
@@ -81,6 +85,7 @@ impl LspSnapshot {
         self.completion.open
             || self.code_action.open
             || self.signature_help.open
+            || self.locations_picker.open
             || self.hover.is_some()
             || self.diagnostic.is_some()
     }
@@ -133,8 +138,14 @@ impl OverlayMode for crate::input::EditorMode {
                     .try_global::<InputOverlayRegistry<Self>>()
                     .and_then(|registry| registry.hosts.get(&id))
                     .and_then(|(_, host)| host.lsp.as_ref())
-                    .map(|lsp| (lsp.completion.clone(), lsp.code_actions.clone()));
-                let Some((completion, code_actions)) = menus else {
+                    .map(|lsp| {
+                        (
+                            lsp.completion.clone(),
+                            lsp.code_actions.clone(),
+                            lsp.locations_picker.clone(),
+                        )
+                    });
+                let Some((completion, code_actions, locations_picker)) = menus else {
                     return false;
                 };
                 match kind {
@@ -144,6 +155,8 @@ impl OverlayMode for crate::input::EditorMode {
                     gpui_base::input::InputOverlayKind::CodeAction => {
                         code_actions.update(cx, |menu, cx| menu.handle_action(action, window, cx))
                     }
+                    gpui_base::input::InputOverlayKind::LocationsPicker => locations_picker
+                        .update(cx, |picker, cx| picker.handle_action(action, window, cx)),
                 }
             });
         });
@@ -166,6 +179,10 @@ impl OverlayMode for crate::input::EditorMode {
                 open: state.signature_help_state().help.is_some(),
                 revision: state.signature_help_state().revision(),
             },
+            locations_picker: OverlaySignature {
+                open: state.locations_picker_state().open,
+                revision: state.locations_picker_state().revision(),
+            },
             hover: state
                 .hover_popover()
                 .map(|popover| popover.symbol_range.clone()),
@@ -183,11 +200,13 @@ impl OverlayMode for crate::input::EditorMode {
             completion: CompletionMenu::new(state.clone(), window, cx),
             code_actions: CodeActionMenu::new(state.clone(), window, cx),
             signature_help: SignatureHelpPopover::new(state.clone(), window, cx),
+            locations_picker: LocationsPicker::new(state.clone(), window, cx),
             hover: None,
             diagnostic: None,
             completion_signature: OverlaySignature::default(),
             code_action_signature: OverlaySignature::default(),
             signature_help_signature: OverlaySignature::default(),
+            locations_picker_signature: OverlaySignature::default(),
             hover_signature: None,
             diagnostic_signature: None,
         })
@@ -236,6 +255,25 @@ impl OverlayMode for crate::input::EditorMode {
                     menu.show(cursor, items, window, cx);
                 } else {
                     menu.hide(cx);
+                }
+            });
+        }
+
+        if snapshot.locations_picker != lsp.locations_picker_signature {
+            lsp.locations_picker_signature = OverlaySignature {
+                open: snapshot.locations_picker.open,
+                revision: snapshot.locations_picker.revision,
+            };
+            let open = snapshot.locations_picker.open;
+            let (title, items) = {
+                let picker = state.read(cx).locations_picker_state();
+                (picker.title.clone(), picker.items.clone())
+            };
+            lsp.locations_picker.update(cx, |picker, cx| {
+                if open {
+                    picker.show(title, items, window, cx);
+                } else {
+                    picker.hide(cx);
                 }
             });
         }
@@ -374,6 +412,9 @@ impl<M: OverlayMode> InputOverlayHost<M> {
             }
             if snapshot.signature_help.open {
                 floating.push(lsp.signature_help.clone().into_any_element());
+            }
+            if snapshot.locations_picker.open {
+                floating.push(lsp.locations_picker.clone().into_any_element());
             }
             if let Some(hover) = lsp.hover.as_ref() {
                 floating.push(hover.clone().into_any_element());

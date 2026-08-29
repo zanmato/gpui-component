@@ -2,12 +2,14 @@ mod code_action_menu;
 mod completion_menu;
 mod diagnostic_popover;
 mod hover_popover;
+mod locations_picker;
 mod signature_help_popover;
 
 pub(crate) use code_action_menu::*;
 pub(crate) use completion_menu::*;
 pub(crate) use diagnostic_popover::*;
 pub(crate) use hover_popover::*;
+pub(crate) use locations_picker::*;
 pub(crate) use signature_help_popover::*;
 
 use gpui::{

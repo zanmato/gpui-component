@@ -241,12 +241,14 @@ impl InputBaseState<EditorMode> {
         self.extras.context_menu_content.completion.open = false;
         self.extras.context_menu_content.code_action.open = false;
         self.extras.context_menu_task = Task::ready(Ok(()));
+        self.dismiss_locations_picker(cx);
         cx.notify();
     }
 
     pub(crate) fn is_context_menu_open(&self, _cx: &gpui::App) -> bool {
         self.extras.context_menu_content.completion.open
             || self.extras.context_menu_content.code_action.open
+            || self.extras.locations_picker.open
     }
 
     pub(crate) fn handle_action_for_context_menu(
@@ -261,6 +263,8 @@ impl InputBaseState<EditorMode> {
             Some(super::InputOverlayKind::Completion)
         } else if self.extras.context_menu_content.code_action.open {
             Some(super::InputOverlayKind::CodeAction)
+        } else if self.extras.locations_picker.open {
+            Some(super::InputOverlayKind::LocationsPicker)
         } else {
             None
         };
@@ -275,6 +279,9 @@ impl InputBaseState<EditorMode> {
                 }
                 super::InputOverlayKind::CodeAction => {
                     self.extras.context_menu_content.code_action.open = false
+                }
+                super::InputOverlayKind::LocationsPicker => {
+                    self.dismiss_locations_picker(cx);
                 }
             }
             cx.notify();

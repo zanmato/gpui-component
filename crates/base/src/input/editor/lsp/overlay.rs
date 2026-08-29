@@ -61,6 +61,7 @@ pub(crate) struct ContextMenuContent {
 pub enum InputOverlayKind {
     Completion,
     CodeAction,
+    LocationsPicker,
 }
 
 impl InputBaseState<EditorMode> {

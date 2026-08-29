@@ -375,6 +375,7 @@ pub struct EditorExtras {
     pub(crate) context_menu_task: Task<anyhow::Result<()>>,
     pub(crate) snippet: Option<crate::input::lsp::SnippetSession>,
     pub(crate) signature_help: crate::input::lsp::SignatureHelpState,
+    pub(crate) locations_picker: crate::input::lsp::LocationsPickerState,
 }
 
 impl Default for EditorExtras {
@@ -389,6 +390,7 @@ impl Default for EditorExtras {
             context_menu_task: Task::ready(Ok(())),
             snippet: None,
             signature_help: crate::input::lsp::SignatureHelpState::default(),
+            locations_picker: crate::input::lsp::LocationsPickerState::default(),
         }
     }
 }

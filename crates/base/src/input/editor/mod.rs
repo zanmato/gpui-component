@@ -198,6 +198,7 @@ impl InputModeKind for EditorMode {
             .on_action(window.listener_for(entity, InputBaseState::on_action_toggle_code_actions))
             .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_definition))
             .on_action(window.listener_for(entity, InputBaseState::on_action_toggle_signature_help))
+            .on_action(window.listener_for(entity, InputBaseState::on_action_find_all_references))
     }
 }
 
