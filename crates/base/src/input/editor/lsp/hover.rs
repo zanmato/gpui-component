@@ -115,19 +115,10 @@ impl InputBaseState<EditorMode> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_support::build_editor;
     use super::*;
-    use crate::input::{EditorState, InputBaseState};
-    use crate::theme::Theme;
-    use gpui::{App, Entity, TestAppContext, VisualTestContext, prelude::*};
+    use gpui::{App, TestAppContext};
     use std::rc::Rc;
-
-    struct TestRoot(Entity<InputBaseState<EditorMode>>);
-
-    impl Render for TestRoot {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            gpui::div().size_full().child(self.0.clone())
-        }
-    }
 
     struct StaticHover;
 
@@ -146,23 +137,6 @@ mod tests {
                 range: None,
             })))
         }
-    }
-
-    fn build_editor(
-        cx: &mut TestAppContext,
-    ) -> (Entity<InputBaseState<EditorMode>>, VisualTestContext) {
-        let mut editor = None;
-        let window = cx.update(|cx| {
-            cx.open_window(Default::default(), |window, cx| {
-                cx.set_global(Theme::default());
-                crate::input::init(cx);
-                editor = Some(cx.new(|cx| EditorState::new(window, cx)));
-                cx.new(|_| TestRoot(editor.clone().unwrap()))
-            })
-            .unwrap()
-        });
-        let cx = VisualTestContext::from_window(window.into(), cx);
-        (editor.unwrap(), cx)
     }
 
     #[gpui::test]

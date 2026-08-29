@@ -12,6 +12,7 @@ mod document_colors;
 mod hover;
 mod overlay;
 mod semantic_tokens;
+mod workspace_edit;
 
 pub use code_actions::*;
 pub use completions::*;
@@ -20,6 +21,43 @@ pub use document_colors::*;
 pub use hover::*;
 pub use overlay::*;
 pub use semantic_tokens::*;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use crate::input::{EditorMode, EditorState, InputBaseState};
+    use crate::theme::Theme;
+    use gpui::{Entity, TestAppContext, VisualTestContext, div, prelude::*};
+
+    struct TestRoot(Entity<InputBaseState<EditorMode>>);
+
+    impl Render for TestRoot {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().size_full().child(self.0.clone())
+        }
+    }
+
+    /// Open an editor state in a test window, for the LSP tests.
+    pub(crate) fn build_editor(
+        cx: &mut TestAppContext,
+    ) -> (Entity<InputBaseState<EditorMode>>, VisualTestContext) {
+        let mut editor = None;
+        let window = cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                cx.set_global(Theme::default());
+                crate::input::init(cx);
+                editor = Some(cx.new(|cx| EditorState::new(window, cx)));
+                cx.new(|_| TestRoot(editor.clone().unwrap()))
+            })
+            .unwrap()
+        });
+        let cx = VisualTestContext::from_window(window.into(), cx);
+        (editor.unwrap(), cx)
+    }
+}
 
 /// Host hook to show a document when following an LSP location
 /// (Go to Definition), modeled after the `window/showDocument` request.
@@ -58,6 +96,10 @@ pub struct Lsp {
     /// Display options for the completion popover.
     pub completion_menu: CompletionMenuOptions,
 
+    /// The URI identifying the document this editor hosts, see
+    /// [`Self::document_uri`].
+    pub(crate) document_uri: Option<lsp_types::Uri>,
+
     pub(crate) document_colors: Vec<(lsp_types::Range, Hsla)>,
     /// Cached semantic tokens as absolute position ranges + theme token-type
     /// names. Color is resolved from the name at paint time so theme switches
@@ -79,6 +121,7 @@ impl Default for Lsp {
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
             show_document: None,
+            document_uri: None,
             document_colors: vec![],
             semantic_tokens: vec![],
             _hover_task: Task::ready(Ok(())),
@@ -89,6 +132,20 @@ impl Default for Lsp {
 }
 
 impl Lsp {
+    /// Set the URI identifying the document this editor hosts.
+    ///
+    /// [`InputBaseState::apply_workspace_edit`] uses it to pick this
+    /// document's edits out of a [`lsp_types::WorkspaceEdit`]. Without a URI
+    /// every text edit is treated as targeting this editor.
+    pub fn set_document_uri(&mut self, uri: lsp_types::Uri) {
+        self.document_uri = Some(uri);
+    }
+
+    /// The URI identifying the document this editor hosts, if configured.
+    pub fn document_uri(&self) -> Option<&lsp_types::Uri> {
+        self.document_uri.as_ref()
+    }
+
     /// Update the LSP when the text changes.
     ///
     /// `version` is the document version the given `text` belongs to; a
@@ -117,18 +174,17 @@ impl Lsp {
 
 impl InputBaseState<EditorMode> {
     /// Apply a list of [`lsp_types::TextEdit`] to mutate the text.
+    ///
+    /// The batch is applied atomically through
+    /// [`Self::apply_text_edits`]: all ranges are resolved against the
+    /// document before any edit lands, so a multi-edit response anchors
+    /// correctly regardless of its order.
     pub fn apply_lsp_edits(
         &mut self,
         text_edits: &Vec<lsp_types::TextEdit>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for edit in text_edits {
-            let start = self.text.position_to_offset(&edit.range.start);
-            let end = self.text.position_to_offset(&edit.range.end);
-
-            let range_utf16 = self.range_to_utf16(&(start..end));
-            self.replace_text_in_range_silent(Some(range_utf16), &edit.new_text, window, cx);
-        }
+        self.apply_text_edits(text_edits, window, cx);
     }
 }
