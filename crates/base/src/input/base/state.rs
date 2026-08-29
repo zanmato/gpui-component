@@ -112,6 +112,7 @@ actions!(
         MoveToNextWord,
         Escape,
         ToggleCodeActions,
+        ToggleSignatureHelp,
         Search,
         Replace,
         GoToDefinition,
@@ -283,6 +284,10 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-.", ToggleCodeActions, Some(CONTEXT)),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-shift-space", ToggleSignatureHelp, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-space", ToggleSignatureHelp, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-.", ToggleCodeActions, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
@@ -1757,6 +1762,10 @@ impl<M: InputModeKind> InputBaseState<M> {
             self.undo_manager.break_transaction_coalescing();
             self.selections.remove_all_but_active();
             cx.notify();
+            return;
+        }
+
+        if M::dismiss_signature_help(self, cx) {
             return;
         }
 
