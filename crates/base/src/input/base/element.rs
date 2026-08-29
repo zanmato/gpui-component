@@ -1345,6 +1345,9 @@ impl<M: InputModeKind> TextElement<M> {
         // only cover visible (non-folded) lines.
         let mut run_offset = 0;
 
+        let hint_font = window.text_style().font();
+        let hint_color = state.editor_style.muted_foreground;
+
         for (vi, &buffer_line) in last_layout.visible_buffer_lines.iter().enumerate() {
             let line_text: String = display_text.slice_line(buffer_line).into();
             let line_item = state
@@ -1354,11 +1357,12 @@ impl<M: InputModeKind> TextElement<M> {
 
             debug_assert_eq!(line_item.len(), line_text.len());
 
+            let hint_splices = state.extras.inlay_hint_splices(&state.text, buffer_line);
             let mut wrapped_lines: SmallVec<[ShapedLine; 1]> = SmallVec::with_capacity(1);
 
-            for range in &line_item.wrapped_lines {
-                let line_runs = runs_for_range(runs, run_offset, &range);
-                let line_runs = if bg_segments.is_empty() {
+            for (wi, range) in line_item.wrapped_lines.iter().enumerate() {
+                let line_runs = runs_for_range(runs, run_offset, range);
+                let mut line_runs = if bg_segments.is_empty() {
                     line_runs
                 } else {
                     split_runs_by_bg_segments(
@@ -1368,7 +1372,27 @@ impl<M: InputModeKind> TextElement<M> {
                     )
                 };
 
-                let sub_line: SharedString = line_text[range.clone()].to_string().into();
+                let mut sub_line: SharedString = line_text[range.clone()].to_string().into();
+                // Splice inlay hint text into the shaped line; an
+                // end-of-line hint belongs to the final wrapped line.
+                let is_last = wi + 1 == line_item.wrapped_lines.len();
+                let sub_splices: Vec<(usize, &SharedString)> = hint_splices
+                    .iter()
+                    .filter(|(pos, _)| {
+                        (*pos >= range.start && *pos < range.end) || (is_last && *pos == range.end)
+                    })
+                    .map(|(pos, label)| (pos - range.start, label))
+                    .collect();
+                if !sub_splices.is_empty() {
+                    (sub_line, line_runs) = splice_hint_runs(
+                        &sub_line,
+                        &line_runs,
+                        &sub_splices,
+                        &hint_font,
+                        hint_color,
+                    );
+                }
+
                 let line_runs =
                     align_runs_to_char_boundaries(&sub_line, &line_runs).unwrap_or(line_runs);
                 let shaped_line = window
@@ -1393,6 +1417,12 @@ impl<M: InputModeKind> TextElement<M> {
             let line_layout = LineLayout::new()
                 .lines(wrapped_lines)
                 .wrap_indent(wrap_indent)
+                .with_hint_splices(
+                    hint_splices
+                        .iter()
+                        .map(|(pos, label)| (*pos, label.len()))
+                        .collect(),
+                )
                 .with_whitespaces(whitespace_indicators.clone());
             lines.push(line_layout);
 
@@ -2435,6 +2465,63 @@ pub(super) fn runs_for_range(
     }
 
     result
+}
+
+/// Splice inlay hint labels into a wrapped line's text and runs before
+/// shaping. `splices` are (byte offset within `sub_line`, label) sorted by
+/// offset; each label becomes a muted run at its offset, and the
+/// surrounding runs are split around it. The mapping back to buffer
+/// offsets lives on `LineLayout::with_hint_splices`.
+fn splice_hint_runs(
+    sub_line: &str,
+    runs: &[TextRun],
+    splices: &[(usize, &SharedString)],
+    hint_font: &gpui::Font,
+    hint_color: Hsla,
+) -> (SharedString, Vec<TextRun>) {
+    let hint_len: usize = splices.iter().map(|(_, label)| label.len()).sum();
+    let mut text = String::with_capacity(sub_line.len() + hint_len);
+    let mut out_runs = Vec::with_capacity(runs.len() + splices.len() * 2);
+
+    // Emit the buffer text and runs covering `from..to` of `sub_line`.
+    let emit_segment = |from: usize, to: usize, text: &mut String, out_runs: &mut Vec<TextRun>| {
+        if from >= to {
+            return;
+        }
+        text.push_str(&sub_line[from..to]);
+        let mut cursor = 0;
+        for run in runs {
+            let run_range = cursor..cursor + run.len;
+            cursor = run_range.end;
+            let start = run_range.start.max(from);
+            let end = run_range.end.min(to);
+            if start < end {
+                out_runs.push(TextRun {
+                    len: end - start,
+                    ..run.clone()
+                });
+            }
+        }
+    };
+
+    let mut prev = 0;
+    for (pos, label) in splices {
+        let pos = (*pos).min(sub_line.len());
+        emit_segment(prev, pos, &mut text, &mut out_runs);
+        text.push_str(label);
+        out_runs.push(TextRun {
+            len: label.len(),
+            font: hint_font.clone(),
+            color: hint_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+        prev = pos;
+    }
+    emit_segment(prev, sub_line.len(), &mut text, &mut out_runs);
+
+    (text.into(), out_runs)
 }
 
 /// Clip sorted `styles` to the sorted, disjoint `ranges`, splitting styles

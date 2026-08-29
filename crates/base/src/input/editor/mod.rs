@@ -307,6 +307,14 @@ impl crate::input::InputExtras for super::EditorExtras {
         self.inline_completion.item.as_ref()
     }
 
+    fn inlay_hint_splices(
+        &self,
+        text: &ropey::Rope,
+        line: usize,
+    ) -> Vec<(usize, gpui::SharedString)> {
+        self.lsp.inlay_hint_splices(text, line)
+    }
+
     fn context_menu_capabilities(&self) -> (bool, bool) {
         (
             self.lsp.definition_provider.is_some(),

@@ -14,6 +14,7 @@ mod document_symbols;
 mod formatting;
 mod goto;
 mod hover;
+mod inlay_hints;
 mod on_type_formatting;
 mod overlay;
 mod references;
@@ -32,6 +33,7 @@ pub use document_symbols::*;
 pub use formatting::*;
 pub use goto::*;
 pub use hover::*;
+pub use inlay_hints::*;
 pub use on_type_formatting::*;
 pub use overlay::*;
 pub use references::*;
@@ -121,6 +123,8 @@ pub struct Lsp {
     pub formatting_provider: Option<Rc<dyn FormattingProvider>>,
     /// The on-type formatting provider.
     pub on_type_formatting_provider: Option<Rc<dyn OnTypeFormattingProvider>>,
+    /// The inlay hint provider.
+    pub inlay_hint_provider: Option<Rc<dyn InlayHintProvider>>,
     /// The document color provider.
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
@@ -146,6 +150,11 @@ pub struct Lsp {
     /// Occurrences of the symbol under the cursor, as resolved byte
     /// ranges. Cleared on every edit.
     pub(crate) document_highlights: Vec<(std::ops::Range<usize>, lsp_types::DocumentHighlightKind)>,
+    /// Cached inlay hints as (position, flattened label) sorted by
+    /// position. Positions are resolved to byte offsets at layout time.
+    pub(crate) inlay_hints: Vec<(lsp_types::Position, SharedString)>,
+    /// See [`Lsp::set_inlay_hints_enabled`].
+    pub(crate) inlay_hints_enabled: bool,
     pub(crate) _hover_task: Task<Result<()>>,
     pub(crate) _document_color_task: Task<()>,
     pub(crate) _semantic_tokens_task: Task<()>,
@@ -157,6 +166,7 @@ pub struct Lsp {
     pub(crate) _rename_task: Task<()>,
     pub(crate) _format_task: Task<()>,
     pub(crate) _on_type_format_task: Task<()>,
+    pub(crate) _inlay_hint_task: Task<()>,
 }
 
 impl Default for Lsp {
@@ -184,6 +194,10 @@ impl Default for Lsp {
             _format_task: Task::ready(()),
             on_type_formatting_provider: None,
             _on_type_format_task: Task::ready(()),
+            inlay_hint_provider: None,
+            inlay_hints: vec![],
+            inlay_hints_enabled: true,
+            _inlay_hint_task: Task::ready(()),
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
@@ -228,6 +242,7 @@ impl Lsp {
     ) {
         self.update_document_colors(text, version, window, cx);
         self.update_semantic_tokens(text, version, window, cx);
+        self.update_inlay_hints(text, version, window, cx);
     }
 
     /// Reset all LSP states.
@@ -246,6 +261,8 @@ impl Lsp {
         self._rename_task = Task::ready(());
         self._format_task = Task::ready(());
         self._on_type_format_task = Task::ready(());
+        self.inlay_hints.clear();
+        self._inlay_hint_task = Task::ready(());
     }
 }
 

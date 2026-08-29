@@ -8,7 +8,7 @@ use gpui_component::input::{
     CodeActionProvider, CompletionProvider, DeclarationProvider, DefinitionProvider,
     DocumentColorProvider, DocumentHighlightProvider, DocumentRangeSemanticTokensProvider,
     DocumentSymbolProvider, EditorState, FormattingProvider, HoverProvider, ImplementationProvider,
-    OnTypeFormattingProvider, ReferencesProvider, RenameProvider, Rope, RopeExt,
+    InlayHintProvider, OnTypeFormattingProvider, ReferencesProvider, RenameProvider, Rope, RopeExt,
     SignatureHelpProvider, TypeDefinitionProvider,
 };
 use lsp_types::{
@@ -106,6 +106,7 @@ pub fn client_capabilities() -> ClientCapabilities {
             on_type_formatting: Some(
                 lsp_types::DocumentOnTypeFormattingClientCapabilities::default(),
             ),
+            inlay_hint: Some(lsp_types::InlayHintClientCapabilities::default()),
             color_provider: Some(lsp_types::DocumentColorClientCapabilities::default()),
             semantic_tokens: Some(lsp_types::SemanticTokensClientCapabilities {
                 requests: lsp_types::SemanticTokensClientCapabilitiesRequests {
@@ -316,6 +317,9 @@ pub fn install_providers(
         }
         if capabilities.document_on_type_formatting_provider.is_some() {
             lsp.on_type_formatting_provider = Some(providers.clone());
+        }
+        if truthy(&capabilities.inlay_hint_provider) {
+            lsp.inlay_hint_provider = Some(providers.clone());
         }
         let goto_enabled = |simple: Option<bool>| simple.unwrap_or(true);
         if let Some(caps) = &capabilities.type_definition_provider
@@ -579,6 +583,30 @@ impl OnTypeFormattingProvider for ServerProviders {
 
     fn trigger_characters(&self) -> Vec<String> {
         self.on_type_formatting_triggers.clone()
+    }
+}
+
+impl InlayHintProvider for ServerProviders {
+    fn inlay_hints(
+        &self,
+        text: &Rope,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Vec<lsp_types::InlayHint>>> {
+        let request = self.client.request::<lsp_types::request::InlayHintRequest>(
+            lsp_types::InlayHintParams {
+                text_document: TextDocumentIdentifier {
+                    uri: self.uri.clone(),
+                },
+                range: lsp_types::Range {
+                    start: text.offset_to_position(range.start),
+                    end: text.offset_to_position(range.end),
+                },
+                work_done_progress_params: Default::default(),
+            },
+        );
+        cx.spawn(async move |_| Ok(request.await?.unwrap_or_default()))
     }
 }
 

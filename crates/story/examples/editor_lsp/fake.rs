@@ -575,6 +575,45 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn inlay_hints_request_the_whole_document(cx: &mut TestAppContext) {
+        let (server, client) =
+            cx.update(|cx| FakeServer::start(json!({ "inlayHintProvider": true }), cx));
+        client.initialize(initialize_params()).await.unwrap();
+        server.handle("textDocument/inlayHint", |_| {
+            json!([{
+                "position": { "line": 0, "character": 9 },
+                "label": [{ "value": "n:" }, { "value": " int" }],
+                "paddingRight": true,
+            }])
+        });
+
+        let (editor, cx) = build_editor(cx);
+        let uri = document_uri();
+        let text = "add(1, 2)\n";
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value(text, window, cx);
+            });
+            install_providers(&client, &editor, &uri, cx);
+        });
+
+        let provider =
+            cx.update(|_, cx| editor.read(cx).lsp().inlay_hint_provider.clone().unwrap());
+        let task = cx.update(|window, cx| {
+            provider.inlay_hints(&Rope::from(text), 0..text.len(), window, cx)
+        });
+        let hints = task.await.expect("inlay hint request succeeds");
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].position, lsp_types::Position::new(0, 9));
+
+        let requests = server.received("textDocument/inlayHint");
+        assert_eq!(requests.len(), 1);
+        let range = &requests[0]["params"]["range"];
+        assert_eq!(range["start"], json!({ "line": 0, "character": 0 }));
+        assert_eq!(range["end"], json!({ "line": 1, "character": 0 }));
+    }
+
+    #[gpui::test]
     async fn publish_diagnostics_reach_the_diagnostic_set(cx: &mut TestAppContext) {
         let (server, client) = cx.update(|cx| FakeServer::start(json!({}), cx));
         client.initialize(initialize_params()).await.unwrap();

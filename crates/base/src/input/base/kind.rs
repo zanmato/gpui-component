@@ -120,6 +120,13 @@ pub trait InputExtras: Default + 'static {
         None
     }
 
+    /// Inlay hints to splice into `line` while shaping, as (byte offset
+    /// within the line, text to render) sorted by offset, when an LSP
+    /// supplies them.
+    fn inlay_hint_splices(&self, _text: &Rope, _line: usize) -> Vec<(usize, gpui::SharedString)> {
+        Vec::new()
+    }
+
     /// What this mode can offer its context menu: go-to-definition, code actions.
     fn context_menu_capabilities(&self) -> (bool, bool) {
         (false, false)

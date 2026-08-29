@@ -524,6 +524,11 @@ pub(crate) struct LineLayout {
     /// Extra left offset applied to continuation wrapped lines, used to reserve the first line's
     /// indentation when [`WrappingIndent::Same`] is used.
     pub(crate) wrap_indent: Pixels,
+    /// Inlay hint text spliced into the shaped lines, as (byte offset in the
+    /// buffer line, spliced byte length) sorted by offset. The shaped lines
+    /// contain these extra bytes, the buffer does not; every public index
+    /// mapping converts between the two spaces through them.
+    hint_splices: Vec<(usize, usize)>,
     pub(crate) longest_width: Pixels,
     pub(crate) whitespace_indicators: Option<WhitespaceIndicators>,
     /// Whitespace indicators: (line_index, x_position, is_tab)
@@ -537,6 +542,7 @@ impl LineLayout {
             longest_width: px(0.),
             wrapped_lines: SmallVec::new(),
             wrap_indent: px(0.),
+            hint_splices: Vec::new(),
             whitespace_chars: Vec::new(),
             whitespace_indicators: None,
         }
@@ -575,6 +581,64 @@ impl LineLayout {
         self.wrapped_lines = wrapped_lines;
     }
 
+    /// Record the inlay hint text spliced into the shaped lines, as
+    /// (byte offset in the buffer line, spliced byte length) sorted by
+    /// offset. Must be set before [`Self::with_whitespaces`], which skips
+    /// indicators inside splices.
+    pub(crate) fn with_hint_splices(mut self, hint_splices: Vec<(usize, usize)>) -> Self {
+        self.hint_splices = hint_splices;
+        self
+    }
+
+    /// Map a buffer-local byte offset into the shaped (display) space. An
+    /// offset at a hint's own position maps in front of the hint, so the
+    /// cursor sits between the code and the hint text.
+    fn display_index(&self, offset: usize) -> usize {
+        let mut display = offset;
+        for (pos, len) in &self.hint_splices {
+            if *pos < offset {
+                display += len;
+            } else {
+                break;
+            }
+        }
+        display
+    }
+
+    /// Map a shaped (display) byte offset back to the buffer-local space.
+    /// Offsets inside a hint's spliced text snap to the hint's position.
+    fn buffer_index(&self, display: usize) -> usize {
+        let mut inserted = 0;
+        for (pos, len) in &self.hint_splices {
+            let display_pos = pos + inserted;
+            if display <= display_pos {
+                break;
+            }
+            if display < display_pos + len {
+                return *pos;
+            }
+            inserted += len;
+        }
+        display - inserted
+    }
+
+    /// Whether the shaped (display) byte offset falls inside spliced hint
+    /// text.
+    fn in_hint_splice(&self, display: usize) -> bool {
+        let mut inserted = 0;
+        for (pos, len) in &self.hint_splices {
+            let display_pos = pos + inserted;
+            if display < display_pos {
+                return false;
+            }
+            if display < display_pos + len {
+                return true;
+            }
+            inserted += len;
+        }
+        false
+    }
+
     pub(crate) fn with_whitespaces(mut self, indicators: Option<WhitespaceIndicators>) -> Self {
         self.whitespace_indicators = indicators;
         let Some(indicators) = self.whitespace_indicators.as_ref() else {
@@ -583,8 +647,14 @@ impl LineLayout {
 
         let space_indicator_offset = indicators.space.width.half();
 
+        let mut line_start = 0;
         for (line_index, wrapped_line) in self.wrapped_lines.iter().enumerate() {
             for (relative_offset, c) in wrapped_line.text.char_indices() {
+                // Spliced hint text is not document content and gets no
+                // indicators.
+                if self.in_hint_splice(line_start + relative_offset) {
+                    continue;
+                }
                 if matches!(c, ' ' | '\t') {
                     let is_tab = c == '\t';
                     let start_x = wrapped_line.x_for_index(relative_offset);
@@ -599,13 +669,17 @@ impl LineLayout {
                     self.whitespace_chars.push((line_index, x_position, is_tab));
                 }
             }
+            line_start += wrapped_line.len;
         }
         self
     }
 
+    /// The buffer byte length of this line: spliced hint bytes are part of
+    /// the shaped lines but not of the buffer, so they are not counted.
     #[inline]
     pub(crate) fn len(&self) -> usize {
-        self.len
+        let hint_len: usize = self.hint_splices.iter().map(|(_, len)| len).sum();
+        self.len - hint_len
     }
 
     /// Get the position (x, y) for the given index in this line layout.
@@ -620,6 +694,9 @@ impl LineLayout {
         last_layout: &LastLayout,
         line_end_affinity: bool,
     ) -> Option<Point<Pixels>> {
+        // The wrapped lines are shaped with hint text spliced in, so walk
+        // them in display space.
+        let offset = self.display_index(offset);
         let mut acc_len = 0;
         let mut offset_y = px(0.);
 
@@ -668,12 +745,12 @@ impl LineLayout {
         for (i, line) in self.wrapped_lines.iter().enumerate() {
             let line_indent = self.line_indent(i);
             if x <= line_indent + line.width {
-                return acc_len + line.closest_index_for_x(x - line_indent);
+                return self.buffer_index(acc_len + line.closest_index_for_x(x - line_indent));
             }
             acc_len += line.len;
         }
 
-        acc_len
+        self.buffer_index(acc_len)
     }
 
     /// Resolve `pos` to the wrapped sub-line under it.
@@ -722,7 +799,7 @@ impl LineLayout {
         let ix = line.closest_index_for_x(x);
         let line_end_affinity = i + 1 < self.wrapped_lines.len() && ix == line.len;
 
-        Some((offset + ix, line_end_affinity))
+        Some((self.buffer_index(offset + ix), line_end_affinity))
     }
 
     pub(crate) fn index_for_position(
@@ -732,7 +809,7 @@ impl LineLayout {
     ) -> Option<usize> {
         let (i, offset, x) = self.wrapped_line_at(pos, last_layout)?;
 
-        Some(offset + self.wrapped_lines[i].index_for_x(x)?)
+        Some(self.buffer_index(offset + self.wrapped_lines[i].index_for_x(x)?))
     }
 
     pub(crate) fn size(&self, line_height: Pixels) -> Size<Pixels> {
@@ -792,6 +869,42 @@ mod tests {
     use std::rc::Rc;
 
     use gpui::{Boundary, FontFeatures, FontStyle, FontWeight, px};
+
+    #[test]
+    fn test_hint_splice_index_mapping() {
+        // Buffer line "add(1, 2)" shaped as "add(a: 1, b: 2)": hints "a: "
+        // at buffer byte 4 and "b: " at buffer byte 7, three bytes each.
+        let mut layout = LineLayout::new().with_hint_splices(vec![(4, 3), (7, 3)]);
+        layout.len = "add(a: 1, b: 2)".len();
+
+        assert_eq!(layout.len(), "add(1, 2)".len());
+
+        // Offsets before, at, and after each splice map monotonically; an
+        // offset at a hint's own position stays in front of the hint.
+        assert_eq!(layout.display_index(0), 0);
+        assert_eq!(layout.display_index(4), 4);
+        assert_eq!(layout.display_index(5), 8);
+        assert_eq!(layout.display_index(7), 10);
+        assert_eq!(layout.display_index(8), 14);
+        assert_eq!(layout.display_index(9), 15);
+
+        // The reverse mapping snaps display offsets inside hint text to the
+        // hint's buffer position and round-trips the rest.
+        assert_eq!(layout.buffer_index(0), 0);
+        assert_eq!(layout.buffer_index(4), 4);
+        assert_eq!(layout.buffer_index(5), 4);
+        assert_eq!(layout.buffer_index(6), 4);
+        assert_eq!(layout.buffer_index(8), 5);
+        assert_eq!(layout.buffer_index(11), 7);
+        assert_eq!(layout.buffer_index(14), 8);
+        assert_eq!(layout.buffer_index(15), 9);
+
+        assert!(!layout.in_hint_splice(3));
+        assert!(layout.in_hint_splice(4));
+        assert!(layout.in_hint_splice(5));
+        assert!(layout.in_hint_splice(12));
+        assert!(!layout.in_hint_splice(14));
+    }
 
     #[test]
     fn test_update() {
