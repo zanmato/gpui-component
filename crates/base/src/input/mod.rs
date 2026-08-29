@@ -115,8 +115,8 @@ pub use lsp::{
     CodeActionItem, CodeActionMenuState, CodeActionProvider, CompletionHighlighter,
     CompletionMenuOptions, CompletionMenuState, CompletionProvider, DefinitionProvider,
     DocumentColorProvider, DocumentRangeSemanticTokensProvider, HoverPopoverState, HoverProvider,
-    InputOverlayKind, Lsp, SelectionRangeProvider, ShowDocumentHandler, highlight_characters,
-    highlight_contains, highlight_prefix,
+    InputOverlayKind, Lsp, SelectionRangeProvider, ShowDocumentHandler, SignatureHelpProvider,
+    SignatureHelpState, highlight_characters, highlight_contains, highlight_prefix,
 };
 pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;
