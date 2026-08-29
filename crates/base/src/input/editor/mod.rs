@@ -57,6 +57,13 @@ impl InputModeKind for EditorMode {
             .adjust_for_edit(range, new_len);
     }
 
+    fn dismiss_signature_help(
+        state: &mut InputBaseState<Self>,
+        cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) -> bool {
+        state.dismiss_signature_help(cx)
+    }
+
     fn refresh_language_features(
         state: &mut InputBaseState<Self>,
         window: &mut Window,
@@ -104,6 +111,7 @@ impl InputModeKind for EditorMode {
         cx: &mut gpui::Context<InputBaseState<Self>>,
     ) {
         state.handle_completion_trigger(range, text, window, cx);
+        state.handle_signature_help_trigger(range, text, window, cx);
     }
 
     fn clear_inline_completion(
@@ -198,6 +206,7 @@ impl InputModeKind for EditorMode {
         element
             .on_action(window.listener_for(entity, InputBaseState::on_action_toggle_code_actions))
             .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_definition))
+            .on_action(window.listener_for(entity, InputBaseState::on_action_toggle_signature_help))
     }
 }
 
