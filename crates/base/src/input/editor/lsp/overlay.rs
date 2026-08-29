@@ -170,28 +170,42 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let mut range = fallback_range;
-        let mut new_text = item.label.clone();
-        if let Some(edit) = item.text_edit.as_ref() {
-            match edit {
-                lsp_types::CompletionTextEdit::Edit(edit) => {
-                    new_text.clone_from(&edit.new_text);
-                    range = self.text.position_to_offset(&edit.range.start)
-                        ..self.text.position_to_offset(&edit.range.end);
-                }
-                lsp_types::CompletionTextEdit::InsertAndReplace(edit) => {
-                    new_text.clone_from(&edit.new_text);
-                    range = self.text.position_to_offset(&edit.replace.start)
-                        ..self.text.position_to_offset(&edit.replace.end);
-                }
+        use crate::input::RopeExt as _;
+
+        let primary = match item.text_edit.as_ref() {
+            Some(lsp_types::CompletionTextEdit::Edit(edit)) => edit.clone(),
+            Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) => {
+                lsp_types::TextEdit::new(edit.replace, edit.new_text.clone())
             }
-        } else if let Some(insert_text) = item.insert_text.as_ref() {
-            new_text.clone_from(insert_text);
-            range = range.end..range.end;
-        }
+            None => {
+                let (range, new_text) = match item.insert_text.as_ref() {
+                    Some(insert_text) => {
+                        (fallback_range.end..fallback_range.end, insert_text.clone())
+                    }
+                    None => (fallback_range, item.label.clone()),
+                };
+                lsp_types::TextEdit::new(
+                    lsp_types::Range::new(
+                        self.text.offset_to_position(range.start),
+                        self.text.offset_to_position(range.end),
+                    ),
+                    new_text,
+                )
+            }
+        };
+
+        // The primary edit and the item's additional edits (auto-imports and
+        // the like) land as one atomic batch: correctly anchored regardless
+        // of order, and undone in a single step.
+        let mut edits = vec![primary.clone()];
+        edits.extend(item.additional_text_edits.clone().unwrap_or_default());
+
         self.completion_inserting = true;
-        let range = self.range_to_utf16(&range);
-        self.replace_text_in_range_silent(Some(range), &new_text, window, cx);
+        if !self.apply_text_edits(&edits, window, cx) {
+            // A server sent additional edits overlapping the primary edit;
+            // salvage the confirmation itself.
+            self.apply_text_edits(&[primary], window, cx);
+        }
         self.completion_inserting = false;
         self.focus(window, cx);
     }
@@ -213,5 +227,59 @@ impl InputBaseState<EditorMode> {
     pub fn dismiss_lsp_overlays(&mut self, cx: &mut Context<Self>) {
         self.hide_context_menu(cx);
         self.clear_hover_state(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_support::build_editor;
+    use crate::input::Undo;
+    use gpui::TestAppContext;
+    use lsp_types::{CompletionItem, CompletionTextEdit, Position, TextEdit};
+
+    fn edit(start: (u32, u32), end: (u32, u32), new_text: &str) -> TextEdit {
+        TextEdit::new(
+            lsp_types::Range::new(Position::new(start.0, start.1), Position::new(end.0, end.1)),
+            new_text.to_string(),
+        )
+    }
+
+    #[gpui::test]
+    fn insert_completion_applies_additional_edits_atomically(cx: &mut TestAppContext) {
+        let (editor, mut cx) = build_editor(cx);
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.set_value("Prin", window, cx);
+                editor.selected_range = (4..4).into();
+            });
+        });
+
+        // An auto-import style completion: the primary edit completes the
+        // typed prefix, the additional edit inserts an import above it.
+        let item = CompletionItem {
+            label: "Println".into(),
+            text_edit: Some(CompletionTextEdit::Edit(edit((0, 0), (0, 4), "Println"))),
+            additional_text_edits: Some(vec![edit((0, 0), (0, 0), "import \"fmt\"\n")]),
+            ..Default::default()
+        };
+
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.insert_completion(&item, 0..4, window, cx);
+                assert_eq!(editor.text().to_string(), "import \"fmt\"\nPrintln");
+                // The cursor lands at the end of the primary insertion, not
+                // at the additional edit.
+                assert_eq!(editor.cursor(), "import \"fmt\"\nPrintln".len());
+            });
+        });
+
+        // Both edits undo as one step.
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.undo(&Undo, window, cx);
+                assert_eq!(editor.text().to_string(), "Prin");
+            });
+        });
     }
 }

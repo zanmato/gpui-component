@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, DismissEvent, Empty, Entity, EventEmitter,
     Half as _, HighlightStyle, InteractiveElement as _, IntoElement, ParentElement, Pixels, Point,
-    Render, RenderOnce, SharedString, Styled, StyledText, Subscription, WeakEntity, Window,
+    Render, RenderOnce, SharedString, Styled, StyledText, Subscription, Task, WeakEntity, Window,
     deferred, div, prelude::FluentBuilder, px, relative,
 };
 use lsp_types::CompletionItem;
@@ -177,6 +177,7 @@ pub struct CompletionMenu {
     pub(crate) trigger_start_offset: Option<usize>,
     query: SharedString,
     _subscriptions: Vec<Subscription>,
+    _resolve_task: Task<()>,
 }
 
 impl CompletionMenu {
@@ -220,8 +221,50 @@ impl CompletionMenu {
                 trigger_start_offset: None,
                 query: SharedString::default(),
                 _subscriptions,
+                _resolve_task: Task::ready(()),
             }
         })
+    }
+
+    /// Resolve the selected item lazily (`completionItem/resolve`) and swap
+    /// it in place, so its documentation appears without rebuilding the
+    /// list or disturbing the selection.
+    fn resolve_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.open {
+            return;
+        }
+        let ix = self.list.read(cx).delegate().selected_ix;
+        let Some(item) = self.list.read(cx).delegate().selected_item().cloned() else {
+            return;
+        };
+        if item.documentation.is_some() {
+            return;
+        }
+        let Some(provider) = self
+            .editor
+            .upgrade()
+            .and_then(|editor| editor.read(cx).lsp().completion_provider.clone())
+        else {
+            return;
+        };
+
+        let task = provider.resolve((*item).clone(), window, cx);
+        let list = self.list.clone();
+        self._resolve_task = cx.spawn(async move |_, cx| {
+            let Ok(resolved) = task.await else {
+                return;
+            };
+            list.update(cx, |list, cx| {
+                let delegate = list.delegate_mut();
+                if delegate.selected_ix != ix {
+                    return;
+                }
+                if let Some(slot) = delegate.items.get_mut(ix) {
+                    *slot = Rc::new(resolved);
+                    cx.notify();
+                }
+            });
+        });
     }
 
     fn select_item(&mut self, item: &CompletionItem, window: &mut Window, cx: &mut Context<Self>) {
@@ -231,6 +274,23 @@ impl CompletionMenu {
         let editor = self.editor.clone();
 
         cx.spawn_in(window, async move |_, cx| {
+            // Resolve before inserting, so lazily provided
+            // additional_text_edits (auto-imports) are applied with the
+            // confirmation.
+            let resolve = editor
+                .update_in(cx, |editor, window, cx| {
+                    editor
+                        .lsp()
+                        .completion_provider
+                        .clone()
+                        .map(|provider| provider.resolve(item.clone(), window, cx))
+                })
+                .ok()
+                .flatten();
+            let item = match resolve {
+                Some(task) => task.await.unwrap_or(item),
+                None => item,
+            };
             editor.update_in(cx, |editor, window, cx| {
                 editor.insert_completion(&item, range, window, cx);
             })
@@ -281,12 +341,14 @@ impl CompletionMenu {
         self.list.update(cx, |this, cx| {
             this.on_action_select_prev(&actions::SelectUp, window, cx)
         });
+        self.resolve_selected(window, cx);
     }
 
     fn on_action_down(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.list.update(cx, |this, cx| {
             this.on_action_select_next(&actions::SelectDown, window, cx)
         });
+        self.resolve_selected(window, cx);
     }
 
     /// Hide the completion menu and reset the trigger start offset.
@@ -334,6 +396,7 @@ impl CompletionMenu {
             this.set_selected_index(Some(IndexPath::new(0)), window, cx);
             this.set_item_to_measure_index(IndexPath::new(longest_ix), window, cx);
         });
+        self.resolve_selected(window, cx);
 
         cx.notify();
     }

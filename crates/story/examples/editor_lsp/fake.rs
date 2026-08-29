@@ -300,6 +300,85 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn completion_resolve_supplies_documentation_and_additional_edits(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, client) = cx.update(|cx| {
+            FakeServer::start(
+                json!({ "completionProvider": { "resolveProvider": true } }),
+                cx,
+            )
+        });
+        client.initialize(initialize_params()).await.unwrap();
+        cx.run_until_parked();
+
+        // The handshake advertises what the resolve flow can honor.
+        let initialize = &server.received("initialize")[0];
+        assert_eq!(
+            initialize["params"]["capabilities"]["textDocument"]["completion"]["completionItem"]["resolveSupport"]
+                ["properties"],
+            json!(["documentation", "additionalTextEdits"])
+        );
+
+        server.handle("completionItem/resolve", |mut item| {
+            item["documentation"] = json!("Println formats and prints.");
+            item["additionalTextEdits"] = json!([{
+                "range": {
+                    "start": { "line": 0, "character": 0 },
+                    "end": { "line": 0, "character": 0 },
+                },
+                "newText": "import \"fmt\"\n",
+            }]);
+            item
+        });
+
+        let (editor, cx) = build_editor(cx);
+        let uri = document_uri();
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value("Prin", window, cx);
+            });
+            install_providers(&client, &editor, &uri, cx);
+        });
+
+        let bare_item = lsp_types::CompletionItem {
+            label: "Println".into(),
+            text_edit: Some(lsp_types::CompletionTextEdit::Edit(
+                lsp_types::TextEdit::new(
+                    lsp_types::Range::new(
+                        lsp_types::Position::new(0, 0),
+                        lsp_types::Position::new(0, 4),
+                    ),
+                    "Println".into(),
+                ),
+            )),
+            ..Default::default()
+        };
+        let task = cx.update(|window, cx| {
+            let provider = editor.read(cx).lsp().completion_provider.clone().unwrap();
+            provider.resolve(bare_item, window, cx)
+        });
+        let resolved = task.await.expect("resolve succeeds");
+        assert!(resolved.documentation.is_some());
+        assert_eq!(
+            resolved
+                .additional_text_edits
+                .as_ref()
+                .map(|edits| edits.len()),
+            Some(1)
+        );
+
+        // Confirming the resolved item applies the auto-import together
+        // with the completion itself.
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.insert_completion(&resolved, 0..4, window, cx);
+                assert_eq!(state.text().to_string(), "import \"fmt\"\nPrintln");
+            });
+        });
+    }
+
+    #[gpui::test]
     async fn publish_diagnostics_reach_the_diagnostic_set(cx: &mut TestAppContext) {
         let (server, client) = cx.update(|cx| FakeServer::start(json!({}), cx));
         client.initialize(initialize_params()).await.unwrap();

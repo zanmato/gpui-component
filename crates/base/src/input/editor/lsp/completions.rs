@@ -4,10 +4,9 @@ use gpui::{App, Context, EntityInputHandler, Pixels, Task, Window, px};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionResponse, InlineCompletionContext,
     InlineCompletionItem, InlineCompletionResponse, InlineCompletionTriggerKind,
-    request::Completion,
 };
 use ropey::Rope;
-use std::{cell::RefCell, ops::Range, rc::Rc, time::Duration};
+use std::{ops::Range, time::Duration};
 
 use crate::input::InputBaseState;
 
@@ -87,13 +86,24 @@ pub trait CompletionProvider {
         DEFAULT_INLINE_COMPLETION_DEBOUNCE
     }
 
-    fn resolve_completions(
+    /// Resolve the fields a server fills in lazily — typically
+    /// `documentation` and `additional_text_edits`.
+    ///
+    /// Called when a completion item is selected in the menu (to show its
+    /// documentation) and again before the item is confirmed (so
+    /// `additional_text_edits` such as auto-imports arrive in time to be
+    /// applied). The default returns the item unchanged.
+    ///
+    /// completionItem/resolve
+    ///
+    /// https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#completionItem_resolve
+    fn resolve(
         &self,
-        _completion_indices: Vec<usize>,
-        _completions: Rc<RefCell<Box<[Completion]>>>,
-        _: &mut App,
-    ) -> Task<Result<bool>> {
-        Task::ready(Ok(false))
+        item: CompletionItem,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Task<Result<CompletionItem>> {
+        Task::ready(Ok(item))
     }
 
     /// Determines if the completion should be triggered based on the given byte offset.

@@ -3,7 +3,7 @@ use gpui::{App, Context, Hsla, SharedString, Task, Window};
 use ropey::Rope;
 use std::rc::Rc;
 
-use crate::input::{EditorMode, InputBaseState, RopeExt};
+use crate::input::{EditorMode, InputBaseState};
 
 mod code_actions;
 mod completions;

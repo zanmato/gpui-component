@@ -35,6 +35,9 @@ pub fn client_capabilities() -> ClientCapabilities {
                         lsp_types::MarkupKind::Markdown,
                         lsp_types::MarkupKind::PlainText,
                     ]),
+                    resolve_support: Some(lsp_types::CompletionItemCapabilityResolveSupport {
+                        properties: vec!["documentation".into(), "additionalTextEdits".into()],
+                    }),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -268,6 +271,18 @@ impl CompletionProvider for ServerProviders {
                     context: Some(context),
                 });
         cx.spawn(async move |_| Ok(request.await?.unwrap_or(CompletionResponse::Array(vec![]))))
+    }
+
+    fn resolve(
+        &self,
+        item: lsp_types::CompletionItem,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<lsp_types::CompletionItem>> {
+        let request = self
+            .client
+            .request::<lsp_types::request::ResolveCompletionItem>(item);
+        cx.spawn(async move |_| request.await)
     }
 
     fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
