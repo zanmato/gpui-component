@@ -85,8 +85,9 @@ pub use lsp::{
     CompletionMenuState, CompletionProvider, DeclarationProvider, DefinitionProvider,
     DocumentColorProvider, DocumentHighlightProvider, DocumentRangeSemanticTokensProvider,
     DocumentSymbolProvider, HoverPopoverState, HoverProvider, ImplementationProvider,
-    InputOverlayKind, LocationsPickerState, Lsp, PickerLocation, ReferencesProvider,
-    ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState, TypeDefinitionProvider,
+    InputOverlayKind, LocationsPickerState, Lsp, PickerLocation, ReferencesProvider, RenamePrompt,
+    RenamePromptState, RenameProvider, ShowDocumentHandler, SignatureHelpProvider,
+    SignatureHelpState, TypeDefinitionProvider,
 };
 pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;

@@ -376,6 +376,7 @@ pub struct EditorExtras {
     pub(crate) snippet: Option<crate::input::lsp::SnippetSession>,
     pub(crate) signature_help: crate::input::lsp::SignatureHelpState,
     pub(crate) locations_picker: crate::input::lsp::LocationsPickerState,
+    pub(crate) rename_prompt: crate::input::lsp::RenamePromptState,
 }
 
 impl Default for EditorExtras {
@@ -391,6 +392,7 @@ impl Default for EditorExtras {
             snippet: None,
             signature_help: crate::input::lsp::SignatureHelpState::default(),
             locations_picker: crate::input::lsp::LocationsPickerState::default(),
+            rename_prompt: crate::input::lsp::RenamePromptState::default(),
         }
     }
 }

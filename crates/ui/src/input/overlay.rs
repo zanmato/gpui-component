@@ -7,7 +7,7 @@ use super::{
     InputBaseState, InputModeKind,
     popovers::{
         CodeActionMenu, CompletionMenu, DiagnosticPopover, HoverPopover, LocationsPicker,
-        SignatureHelpPopover,
+        RenamePopover, SignatureHelpPopover,
     },
     search::SearchPanel,
 };
@@ -54,12 +54,14 @@ pub(crate) struct LspOverlays {
     code_actions: Entity<CodeActionMenu>,
     signature_help: Entity<SignatureHelpPopover>,
     locations_picker: Entity<LocationsPicker>,
+    rename: Entity<RenamePopover>,
     hover: Option<Entity<HoverPopover>>,
     diagnostic: Option<Entity<DiagnosticPopover>>,
     completion_signature: OverlaySignature,
     code_action_signature: OverlaySignature,
     signature_help_signature: OverlaySignature,
     locations_picker_signature: OverlaySignature,
+    rename_signature: OverlaySignature,
     hover_signature: Option<std::ops::Range<usize>>,
     diagnostic_signature: Option<std::rc::Rc<gpui_base::input::DiagnosticEntry>>,
 }
@@ -75,6 +77,7 @@ pub(crate) struct LspSnapshot {
     code_action: OverlaySignature,
     signature_help: OverlaySignature,
     locations_picker: OverlaySignature,
+    rename: OverlaySignature,
     hover: Option<std::ops::Range<usize>>,
     diagnostic: Option<std::rc::Rc<gpui_base::input::DiagnosticEntry>>,
     cursor: usize,
@@ -86,6 +89,7 @@ impl LspSnapshot {
             || self.code_action.open
             || self.signature_help.open
             || self.locations_picker.open
+            || self.rename.open
             || self.hover.is_some()
             || self.diagnostic.is_some()
     }
@@ -183,6 +187,10 @@ impl OverlayMode for crate::input::EditorMode {
                 open: state.locations_picker_state().open,
                 revision: state.locations_picker_state().revision(),
             },
+            rename: OverlaySignature {
+                open: state.rename_prompt_state().prompt.is_some(),
+                revision: state.rename_prompt_state().revision(),
+            },
             hover: state
                 .hover_popover()
                 .map(|popover| popover.symbol_range.clone()),
@@ -201,12 +209,14 @@ impl OverlayMode for crate::input::EditorMode {
             code_actions: CodeActionMenu::new(state.clone(), window, cx),
             signature_help: SignatureHelpPopover::new(state.clone(), window, cx),
             locations_picker: LocationsPicker::new(state.clone(), window, cx),
+            rename: RenamePopover::new(state.clone(), window, cx),
             hover: None,
             diagnostic: None,
             completion_signature: OverlaySignature::default(),
             code_action_signature: OverlaySignature::default(),
             signature_help_signature: OverlaySignature::default(),
             locations_picker_signature: OverlaySignature::default(),
+            rename_signature: OverlaySignature::default(),
             hover_signature: None,
             diagnostic_signature: None,
         })
@@ -275,6 +285,18 @@ impl OverlayMode for crate::input::EditorMode {
                 } else {
                     picker.hide(cx);
                 }
+            });
+        }
+
+        if snapshot.rename != lsp.rename_signature {
+            lsp.rename_signature = OverlaySignature {
+                open: snapshot.rename.open,
+                revision: snapshot.rename.revision,
+            };
+            let prompt = state.read(cx).rename_prompt_state().prompt.clone();
+            lsp.rename.update(cx, |popover, cx| match prompt {
+                Some(prompt) if snapshot.rename.open => popover.show(&prompt, window, cx),
+                _ => popover.hide(cx),
             });
         }
 
@@ -415,6 +437,9 @@ impl<M: OverlayMode> InputOverlayHost<M> {
             }
             if snapshot.locations_picker.open {
                 floating.push(lsp.locations_picker.clone().into_any_element());
+            }
+            if snapshot.rename.open {
+                floating.push(lsp.rename.clone().into_any_element());
             }
             if let Some(hover) = lsp.hover.as_ref() {
                 floating.push(hover.clone().into_any_element());

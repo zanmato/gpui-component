@@ -8,7 +8,7 @@ use gpui_component::input::{
     CodeActionProvider, CompletionProvider, DeclarationProvider, DefinitionProvider,
     DocumentColorProvider, DocumentHighlightProvider, DocumentRangeSemanticTokensProvider,
     DocumentSymbolProvider, EditorState, HoverProvider, ImplementationProvider, ReferencesProvider,
-    Rope, RopeExt, SignatureHelpProvider, TypeDefinitionProvider,
+    RenameProvider, Rope, RopeExt, SignatureHelpProvider, TypeDefinitionProvider,
 };
 use lsp_types::{
     ClientCapabilities, CodeAction, CodeActionOrCommand, ColorInformation, CompletionContext,
@@ -94,6 +94,10 @@ pub fn client_capabilities() -> ClientCapabilities {
             references: Some(lsp_types::ReferenceClientCapabilities::default()),
             document_symbol: Some(lsp_types::DocumentSymbolClientCapabilities {
                 hierarchical_document_symbol_support: Some(true),
+                ..Default::default()
+            }),
+            rename: Some(lsp_types::RenameClientCapabilities {
+                prepare_support: Some(true),
                 ..Default::default()
             }),
             color_provider: Some(lsp_types::DocumentColorClientCapabilities::default()),
@@ -186,6 +190,7 @@ pub struct ServerProviders {
     completion_triggers: Vec<String>,
     signature_help_triggers: Vec<String>,
     signature_help_retriggers: Vec<String>,
+    rename_prepare_supported: bool,
     semantic_tokens_legend: SemanticTokensLegend,
 }
 
@@ -239,6 +244,10 @@ pub fn install_providers(
         signature_help_retriggers: signature_help_options
             .and_then(|options| options.retrigger_characters.clone())
             .unwrap_or_default(),
+        rename_prepare_supported: matches!(
+            &capabilities.rename_provider,
+            Some(lsp_types::OneOf::Right(options)) if options.prepare_provider == Some(true)
+        ),
         semantic_tokens_legend: semantic_tokens
             .as_ref()
             .map(|(legend, _)| legend.clone())
@@ -276,6 +285,9 @@ pub fn install_providers(
         }
         if truthy(&capabilities.document_symbol_provider) {
             lsp.document_symbol_provider = Some(providers.clone());
+        }
+        if truthy(&capabilities.rename_provider) {
+            lsp.rename_provider = Some(providers.clone());
         }
         let goto_enabled = |simple: Option<bool>| simple.unwrap_or(true);
         if let Some(caps) = &capabilities.type_definition_provider
@@ -422,6 +434,45 @@ impl SignatureHelpProvider for ServerProviders {
 
     fn retrigger_characters(&self) -> Vec<String> {
         self.signature_help_retriggers.clone()
+    }
+}
+
+impl RenameProvider for ServerProviders {
+    fn prepare_rename(
+        &self,
+        text: &Rope,
+        offset: usize,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Option<lsp_types::PrepareRenameResponse>>> {
+        let request = self
+            .client
+            .request::<lsp_types::request::PrepareRenameRequest>(
+                self.document_position(text, offset),
+            );
+        cx.spawn(async move |_| request.await)
+    }
+
+    fn rename(
+        &self,
+        text: &Rope,
+        offset: usize,
+        new_name: &str,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Option<lsp_types::WorkspaceEdit>>> {
+        let request = self
+            .client
+            .request::<lsp_types::request::Rename>(lsp_types::RenameParams {
+                text_document_position: self.document_position(text, offset),
+                new_name: new_name.to_string(),
+                work_done_progress_params: Default::default(),
+            });
+        cx.spawn(async move |_| request.await)
+    }
+
+    fn supports_prepare(&self) -> bool {
+        self.rename_prepare_supported
     }
 }
 

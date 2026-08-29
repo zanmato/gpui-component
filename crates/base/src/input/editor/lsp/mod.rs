@@ -15,6 +15,7 @@ mod goto;
 mod hover;
 mod overlay;
 mod references;
+mod rename;
 mod semantic_tokens;
 mod signature_help;
 mod snippet;
@@ -30,6 +31,7 @@ pub use goto::*;
 pub use hover::*;
 pub use overlay::*;
 pub use references::*;
+pub use rename::*;
 pub use semantic_tokens::*;
 pub use signature_help::*;
 pub(crate) use snippet::*;
@@ -109,6 +111,8 @@ pub struct Lsp {
     pub implementation_provider: Option<Rc<dyn ImplementationProvider>>,
     /// The declaration provider.
     pub declaration_provider: Option<Rc<dyn DeclarationProvider>>,
+    /// The rename provider.
+    pub rename_provider: Option<Rc<dyn RenameProvider>>,
     /// The document color provider.
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
@@ -142,6 +146,7 @@ pub struct Lsp {
     pub(crate) _references_task: Task<()>,
     pub(crate) _document_symbols_task: Task<()>,
     pub(crate) _goto_task: Task<()>,
+    pub(crate) _rename_task: Task<()>,
 }
 
 impl Default for Lsp {
@@ -163,6 +168,8 @@ impl Default for Lsp {
             implementation_provider: None,
             declaration_provider: None,
             _goto_task: Task::ready(()),
+            rename_provider: None,
+            _rename_task: Task::ready(()),
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
@@ -222,6 +229,7 @@ impl Lsp {
         self._references_task = Task::ready(());
         self._document_symbols_task = Task::ready(());
         self._goto_task = Task::ready(());
+        self._rename_task = Task::ready(());
     }
 }
 
