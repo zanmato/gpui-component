@@ -216,6 +216,14 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
         false
     }
 
+    /// Hides an open signature-help popover. Returns whether one was open.
+    fn dismiss_signature_help(
+        _state: &mut InputBaseState<Self>,
+        _cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) -> bool {
+        false
+    }
+
     /// Takes the pending inline completion, when Tab should accept it.
     fn accept_inline_completion(
         _state: &mut InputBaseState<Self>,
@@ -347,6 +355,7 @@ pub struct EditorExtras {
     pub(crate) hover_definition: HoverDefinition,
     pub(crate) context_menu_task: Task<anyhow::Result<()>>,
     pub(crate) snippet: Option<crate::input::lsp::SnippetSession>,
+    pub(crate) signature_help: crate::input::lsp::SignatureHelpState,
 }
 
 impl Default for EditorExtras {
@@ -360,6 +369,7 @@ impl Default for EditorExtras {
             hover_definition: HoverDefinition::default(),
             context_menu_task: Task::ready(Ok(())),
             snippet: None,
+            signature_help: crate::input::lsp::SignatureHelpState::default(),
         }
     }
 }

@@ -379,6 +379,82 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn signature_help_requests_carry_trigger_context(cx: &mut TestAppContext) {
+        let (server, client) = cx.update(|cx| {
+            FakeServer::start(
+                json!({ "signatureHelpProvider": { "triggerCharacters": ["(", ","] } }),
+                cx,
+            )
+        });
+        client.initialize(initialize_params()).await.unwrap();
+        server.handle("textDocument/signatureHelp", |_| {
+            json!({
+                "signatures": [{
+                    "label": "func Fprintf(w io.Writer, format string, a ...any)",
+                    "parameters": [
+                        { "label": "w io.Writer" },
+                        { "label": "format string" },
+                    ],
+                }],
+                "activeSignature": 0,
+                "activeParameter": 0,
+            })
+        });
+
+        let (editor, cx) = build_editor(cx);
+        let uri = document_uri();
+        cx.update(|window, cx| {
+            editor.update(cx, |state, cx| {
+                state.set_value("fmt.Fprintf", window, cx);
+            });
+            install_providers(&client, &editor, &uri, cx);
+        });
+
+        let task = cx.update(|window, cx| {
+            let provider = editor
+                .read(cx)
+                .lsp()
+                .signature_help_provider
+                .clone()
+                .unwrap();
+            provider.signature_help(
+                &Rope::from("fmt.Fprintf("),
+                12,
+                lsp_types::SignatureHelpContext {
+                    trigger_kind: lsp_types::SignatureHelpTriggerKind::TRIGGER_CHARACTER,
+                    trigger_character: Some("(".into()),
+                    is_retrigger: false,
+                    active_signature_help: None,
+                },
+                window,
+                cx,
+            )
+        });
+        let help = task.await.expect("request succeeds").expect("has help");
+        assert_eq!(help.signatures.len(), 1);
+        assert_eq!(help.active_parameter, Some(0));
+
+        let requests = server.received("textDocument/signatureHelp");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0]["params"]["context"]["triggerCharacter"],
+            json!("(")
+        );
+        assert_eq!(requests[0]["params"]["position"]["character"], json!(12));
+        // The provider surfaced the server's declared trigger characters,
+        // which drive the editor-side trigger logic.
+        cx.update(|_, cx| {
+            let provider = editor
+                .read(cx)
+                .lsp()
+                .signature_help_provider
+                .clone()
+                .unwrap();
+            assert_eq!(provider.trigger_characters(), vec!["(", ","]);
+        });
+    }
+
+    #[gpui::test]
     async fn publish_diagnostics_reach_the_diagnostic_set(cx: &mut TestAppContext) {
         let (server, client) = cx.update(|cx| FakeServer::start(json!({}), cx));
         client.initialize(initialize_params()).await.unwrap();

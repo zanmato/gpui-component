@@ -12,6 +12,7 @@ mod document_colors;
 mod hover;
 mod overlay;
 mod semantic_tokens;
+mod signature_help;
 mod snippet;
 mod workspace_edit;
 
@@ -22,6 +23,7 @@ pub use document_colors::*;
 pub use hover::*;
 pub use overlay::*;
 pub use semantic_tokens::*;
+pub use signature_help::*;
 pub(crate) use snippet::*;
 
 #[cfg(test)]
@@ -85,6 +87,8 @@ pub struct Lsp {
     pub hover_provider: Option<Rc<dyn HoverProvider>>,
     /// The definition provider.
     pub definition_provider: Option<Rc<dyn DefinitionProvider>>,
+    /// The signature help provider.
+    pub signature_help_provider: Option<Rc<dyn SignatureHelpProvider>>,
     /// The document color provider.
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
@@ -110,6 +114,7 @@ pub struct Lsp {
     pub(crate) _hover_task: Task<Result<()>>,
     pub(crate) _document_color_task: Task<()>,
     pub(crate) _semantic_tokens_task: Task<()>,
+    pub(crate) _signature_help_task: Task<()>,
 }
 
 impl Default for Lsp {
@@ -119,6 +124,7 @@ impl Default for Lsp {
             code_action_providers: vec![],
             hover_provider: None,
             definition_provider: None,
+            signature_help_provider: None,
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
@@ -129,6 +135,7 @@ impl Default for Lsp {
             _hover_task: Task::ready(Ok(())),
             _document_color_task: Task::ready(()),
             _semantic_tokens_task: Task::ready(()),
+            _signature_help_task: Task::ready(()),
         }
     }
 }
@@ -171,6 +178,7 @@ impl Lsp {
         self._hover_task = Task::ready(Ok(()));
         self._document_color_task = Task::ready(());
         self._semantic_tokens_task = Task::ready(());
+        self._signature_help_task = Task::ready(());
     }
 }
 

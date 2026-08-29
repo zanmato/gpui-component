@@ -7,6 +7,7 @@ use gpui::{App, Entity, SharedString, Task, Window};
 use gpui_component::input::{
     CodeActionProvider, CompletionProvider, DefinitionProvider, DocumentColorProvider,
     DocumentRangeSemanticTokensProvider, EditorState, HoverProvider, Rope, RopeExt,
+    SignatureHelpProvider,
 };
 use lsp_types::{
     ClientCapabilities, CodeAction, CodeActionOrCommand, ColorInformation, CompletionContext,
@@ -41,6 +42,20 @@ pub fn client_capabilities() -> ClientCapabilities {
                     }),
                     ..Default::default()
                 }),
+                ..Default::default()
+            }),
+            signature_help: Some(lsp_types::SignatureHelpClientCapabilities {
+                signature_information: Some(lsp_types::SignatureInformationSettings {
+                    documentation_format: Some(vec![
+                        lsp_types::MarkupKind::Markdown,
+                        lsp_types::MarkupKind::PlainText,
+                    ]),
+                    parameter_information: Some(lsp_types::ParameterInformationSettings {
+                        label_offset_support: Some(true),
+                    }),
+                    active_parameter_support: Some(true),
+                }),
+                context_support: Some(true),
                 ..Default::default()
             }),
             hover: Some(lsp_types::HoverClientCapabilities {
@@ -150,6 +165,8 @@ pub struct ServerProviders {
     client: LspClient,
     uri: Uri,
     completion_triggers: Vec<String>,
+    signature_help_triggers: Vec<String>,
+    signature_help_retriggers: Vec<String>,
     semantic_tokens_legend: SemanticTokensLegend,
 }
 
@@ -192,10 +209,17 @@ pub fn install_providers(
         (options.legend.clone(), options.range.unwrap_or(false))
     });
 
+    let signature_help_options = capabilities.signature_help_provider.as_ref();
     let providers = Rc::new(ServerProviders {
         client: client.clone(),
         uri: uri.clone(),
         completion_triggers,
+        signature_help_triggers: signature_help_options
+            .and_then(|options| options.trigger_characters.clone())
+            .unwrap_or_default(),
+        signature_help_retriggers: signature_help_options
+            .and_then(|options| options.retrigger_characters.clone())
+            .unwrap_or_default(),
         semantic_tokens_legend: semantic_tokens
             .as_ref()
             .map(|(legend, _)| legend.clone())
@@ -221,6 +245,9 @@ pub fn install_providers(
         }
         if capabilities.code_action_provider.is_some() {
             lsp.code_action_providers = vec![providers.clone()];
+        }
+        if capabilities.signature_help_provider.is_some() {
+            lsp.signature_help_provider = Some(providers.clone());
         }
         if capabilities.color_provider.is_some() {
             lsp.document_color_provider = Some(providers.clone());
@@ -314,6 +341,34 @@ impl HoverProvider for ServerProviders {
                     work_done_progress_params: Default::default(),
                 });
         cx.spawn(async move |_| request.await)
+    }
+}
+
+impl SignatureHelpProvider for ServerProviders {
+    fn signature_help(
+        &self,
+        text: &Rope,
+        offset: usize,
+        context: lsp_types::SignatureHelpContext,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> Task<Result<Option<lsp_types::SignatureHelp>>> {
+        let request = self
+            .client
+            .request::<lsp_types::request::SignatureHelpRequest>(lsp_types::SignatureHelpParams {
+                text_document_position_params: self.document_position(text, offset),
+                work_done_progress_params: Default::default(),
+                context: Some(context),
+            });
+        cx.spawn(async move |_| request.await)
+    }
+
+    fn trigger_characters(&self) -> Vec<String> {
+        self.signature_help_triggers.clone()
+    }
+
+    fn retrigger_characters(&self) -> Vec<String> {
+        self.signature_help_retriggers.clone()
     }
 }
 
