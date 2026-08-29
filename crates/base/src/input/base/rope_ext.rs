@@ -189,12 +189,16 @@ pub trait RopeExt {
 
     /// Get the byte offset from the given line, column [`Position`] (0-based).
     ///
-    /// The column is in characters.
+    /// The column is in UTF-16 code units, as the LSP specification defines
+    /// for its default (and only mandatory) `utf-16` position encoding.
+    /// A column past the end of the line clamps to the line end; a line past
+    /// the end of the document clamps to the document end.
     fn position_to_offset(&self, line_col: &Position) -> usize;
 
     /// Get the line, column [`Position`] (0-based) from the given byte offset.
     ///
-    /// The column is in characters.
+    /// The column is in UTF-16 code units, as the LSP specification defines
+    /// for its default (and only mandatory) `utf-16` position encoding.
     fn offset_to_position(&self, offset: usize) -> Position;
 
     /// Get point (row, column) from the given byte offset.
@@ -331,14 +335,13 @@ impl RopeExt for Rope {
         let line = self.slice_line(pos.line as usize);
         // Clamp out-of-range columns, then use Ropey's index to avoid rescanning long lines.
         self.line_start_offset(pos.line as usize)
-            + line.char_to_byte_idx((pos.character as usize).min(line.len_chars()))
+            + line.utf16_to_byte_idx((pos.character as usize).min(line.len_utf16()))
     }
 
     fn offset_to_position(&self, offset: usize) -> Position {
         let point = self.offset_to_point(offset);
         let line = self.slice_line(point.row);
-        let offset = line.utf16_to_byte_idx(line.byte_to_utf16_idx(point.column));
-        let character = line.slice(..offset).chars().count();
+        let character = line.byte_to_utf16_idx(point.column.min(line.len()));
         Position::new(point.row as u32, character as u32)
     }
 
@@ -539,20 +542,29 @@ mod tests {
 
     #[test]
     fn test_line_column() {
+        // LSP positions count columns in UTF-16 code units: `中` and `文` are
+        // one unit each, `🎉` is a surrogate pair (two units).
         let rope = Rope::from("a 中文🎉 test\nRope");
         assert_eq!(rope.position_to_offset(&Position::new(0, 3)), "a 中".len());
         assert_eq!(
-            rope.position_to_offset(&Position::new(0, 5)),
+            rope.position_to_offset(&Position::new(0, 4)),
+            "a 中文".len()
+        );
+        assert_eq!(
+            rope.position_to_offset(&Position::new(0, 6)),
             "a 中文🎉".len()
         );
         assert_eq!(
             rope.position_to_offset(&Position::new(1, 1)),
             "a 中文🎉 test\nR".len()
         );
+        // Columns past the end of the line clamp to the line end.
         assert_eq!(
             rope.position_to_offset(&Position::new(0, u32::MAX)),
             "a 中文🎉 test".len()
         );
+        // Lines past the end of the document clamp to the document end.
+        assert_eq!(rope.position_to_offset(&Position::new(99, 0)), rope.len());
 
         assert_eq!(
             rope.offset_to_position("a 中文🎉 test\nR".len()),
@@ -560,8 +572,17 @@ mod tests {
         );
         assert_eq!(
             rope.offset_to_position("a 中文🎉".len()),
-            Position::new(0, 5)
+            Position::new(0, 6)
         );
+        assert_eq!(rope.offset_to_position(rope.len()), Position::new(1, 4));
+
+        // Round-trip on every char boundary of mixed content.
+        let rope = Rope::from("αβ 中文🎉x\nsecond 🚀 line\n");
+        let text = rope.to_string();
+        for (offset, _) in text.char_indices() {
+            let position = rope.offset_to_position(offset);
+            assert_eq!(rope.position_to_offset(&position), offset);
+        }
     }
 
     #[test]
