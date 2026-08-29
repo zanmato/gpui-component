@@ -59,6 +59,7 @@ impl InputBaseState<EditorMode> {
         let range = self.selected_range();
 
         let state = cx.entity();
+        let version = self.document_version;
         self.extras.context_menu_task = cx.spawn_in(window, async move |editor, cx| {
             let mut provider_responses = vec![];
             _ = cx.update(|window, cx| {
@@ -89,6 +90,9 @@ impl InputBaseState<EditorMode> {
             editor
                 .update_in(cx, |editor, window, cx| {
                     if !editor.focus_handle.is_focused(window) {
+                        return;
+                    }
+                    if editor.document_version != version {
                         return;
                     }
 

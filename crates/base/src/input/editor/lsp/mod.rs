@@ -116,14 +116,19 @@ impl Lsp {
     }
 
     /// Update the LSP when the text changes.
+    ///
+    /// `version` is the document version the given `text` belongs to; a
+    /// response resolving against a newer document is discarded, the refetch
+    /// scheduled by that newer edit supplies the fresh data.
     pub(crate) fn update(
         &mut self,
         text: &Rope,
+        version: u64,
         window: &mut Window,
         cx: &mut Context<InputBaseState<EditorMode>>,
     ) {
-        self.update_document_colors(text, window, cx);
-        self.update_semantic_tokens(text, window, cx);
+        self.update_document_colors(text, version, window, cx);
+        self.update_semantic_tokens(text, version, window, cx);
     }
 
     /// Reset all LSP states.

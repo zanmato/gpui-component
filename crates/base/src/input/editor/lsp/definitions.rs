@@ -79,10 +79,14 @@ impl InputBaseState<EditorMode> {
         let task = provider.definitions(&self.text, offset, window, cx);
         let mut symbol_range = self.text.word_range(offset).unwrap_or(offset..offset);
         let editor = cx.entity();
+        let version = self.document_version;
         self.extras.lsp._hover_task = cx.spawn_in(window, async move |_, cx| {
             let locations = task.await?;
 
             _ = editor.update(cx, |editor, cx| {
+                if editor.document_version != version {
+                    return;
+                }
                 if locations.is_empty() {
                     editor.extras.hover_definition.clear();
                 } else {
