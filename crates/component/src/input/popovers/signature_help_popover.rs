@@ -3,12 +3,12 @@ use gpui::{
     Pixels, Point, Render, SharedString, Styled, StyledText, WeakEntity, Window, deferred, div,
     prelude::FluentBuilder, px,
 };
-use lsp_types::{ParameterLabel, SignatureHelp, SignatureInformation};
+use lsp_types::{ParameterLabel, SignatureInformation};
 
 use crate::{
     ActiveTheme,
     input::{
-        EditorState, RopeExt as _,
+        EditorState, RopeExt as _, SignatureHelpState,
         popovers::{editor_popover, render_markdown},
     },
     label::Label,
@@ -22,7 +22,7 @@ const POPOVER_GAP: Pixels = px(4.);
 /// cursor, with the active parameter emphasized.
 pub struct SignatureHelpPopover {
     editor: WeakEntity<EditorState>,
-    help: Option<SignatureHelp>,
+    state: SignatureHelpState,
     open: bool,
 }
 
@@ -32,13 +32,13 @@ impl SignatureHelpPopover {
     pub(crate) fn new(editor: Entity<EditorState>, _: &mut Window, cx: &mut App) -> Entity<Self> {
         cx.new(|_| Self {
             editor: editor.downgrade(),
-            help: None,
+            state: SignatureHelpState::default(),
             open: false,
         })
     }
 
-    pub(crate) fn show(&mut self, help: SignatureHelp, cx: &mut Context<Self>) {
-        self.help = Some(help);
+    pub(crate) fn show(&mut self, state: SignatureHelpState, cx: &mut Context<Self>) {
+        self.state = state;
         self.open = true;
         cx.notify();
     }
@@ -57,20 +57,12 @@ impl SignatureHelpPopover {
         Some(scroll_origin + cursor_bounds.origin - editor.input_bounds().origin)
     }
 
-    fn active_signature(help: &SignatureHelp) -> Option<&SignatureInformation> {
-        let index = help.active_signature.unwrap_or(0) as usize;
-        help.signatures
-            .get(index)
-            .or_else(|| help.signatures.first())
-    }
-
     /// The byte range of the active parameter inside the signature label.
     fn active_parameter_range(
-        help: &SignatureHelp,
         signature: &SignatureInformation,
+        index: Option<usize>,
     ) -> Option<std::ops::Range<usize>> {
-        let index = signature.active_parameter.or(help.active_parameter)? as usize;
-        let parameter = signature.parameters.as_ref()?.get(index)?;
+        let parameter = signature.parameters.as_ref()?.get(index?)?;
         match &parameter.label {
             ParameterLabel::Simple(text) => {
                 let start = signature.label.find(text.as_str())?;
@@ -93,10 +85,13 @@ impl Render for SignatureHelpPopover {
         if !self.open {
             return Empty.into_any_element();
         }
-        let Some(help) = self.help.clone() else {
+        let Some(help) = self.state.help.clone() else {
             return Empty.into_any_element();
         };
-        let Some(signature) = Self::active_signature(&help).cloned() else {
+        let Some(index) = self.state.active_signature() else {
+            return Empty.into_any_element();
+        };
+        let Some(signature) = help.signatures.get(index).cloned() else {
             return Empty.into_any_element();
         };
         let Some(pos) = self.origin(cx) else {
@@ -107,7 +102,7 @@ impl Render for SignatureHelpPopover {
         };
 
         let container_height = editor.read(cx).input_bounds().size.height;
-        let highlights = Self::active_parameter_range(&help, &signature)
+        let highlights = Self::active_parameter_range(&signature, self.state.active_parameter())
             .into_iter()
             .map(|range| {
                 (
@@ -124,7 +119,7 @@ impl Render for SignatureHelpPopover {
             lsp_types::Documentation::String(text) => text.clone(),
             lsp_types::Documentation::MarkupContent(markup) => markup.value.clone(),
         });
-        let extra_signatures = help.signatures.len().saturating_sub(1);
+        let overloads = help.signatures.len();
 
         deferred(
             div()
@@ -142,10 +137,11 @@ impl Render for SignatureHelpPopover {
                                     StyledText::new(signature.label.clone())
                                         .with_highlights(highlights),
                                 )
-                                .when(extra_signatures > 0, |this| {
+                                .when(overloads > 1, |this| {
                                     this.child(
                                         Label::new(SharedString::from(format!(
-                                            "+{extra_signatures} more overloads"
+                                            "{} of {overloads} overloads, ctrl-shift-up/down to cycle",
+                                            index + 1
                                         )))
                                         .text_color(cx.theme().muted_foreground),
                                     )
