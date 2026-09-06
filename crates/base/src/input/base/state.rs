@@ -123,6 +123,8 @@ actions!(
         ToggleCodeActions,
         ShowCompletions,
         ToggleSignatureHelp,
+        SignatureHelpNext,
+        SignatureHelpPrevious,
         Search,
         Replace,
         GoToDefinition,
@@ -211,6 +213,8 @@ pub(crate) fn init(cx: &mut App) {
             Some(CONTEXT),
         ),
         KeyBinding::new("escape", Escape, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-down", SignatureHelpNext, Some(CONTEXT)),
+        KeyBinding::new("ctrl-shift-up", SignatureHelpPrevious, Some(CONTEXT)),
         KeyBinding::new("up", MoveUp, Some(CONTEXT)),
         KeyBinding::new("down", MoveDown, Some(CONTEXT)),
         KeyBinding::new("left", MoveLeft, Some(CONTEXT)),
@@ -4035,7 +4039,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         cx.emit(InputEvent::Focus);
     }
 
-    fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn on_blur(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.revealed_viewport = None;
         if M::is_context_menu_open(self, cx) {
             return;
@@ -4048,6 +4052,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         // Because maybe user want to copy the selected text by AppMenuBar (will take focus handle).
 
         M::clear_hover_state(self, cx);
+        M::dismiss_signature_help(self, cx);
         self.diagnostic_popover = None;
         M::clear_inline_completion(self, cx);
         self.dismiss_touch_selection(cx);
