@@ -37,6 +37,7 @@ impl InputModeKind for EditorMode {
 
     fn reset_annotations(state: &mut InputBaseState<Self>) {
         state.extras.hover_popover = None;
+        state.extras.signature_help = Default::default();
         state.extras.decorations.clear();
     }
 
@@ -150,6 +151,15 @@ impl InputModeKind for EditorMode {
         state.handle_selection_ranges(offset, window, cx);
     }
 
+    fn on_cursor_moved(
+        state: &mut InputBaseState<Self>,
+        _offset: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
+        state.refresh_signature_help(window, cx);
+    }
+
     fn on_mouse_move(
         state: &mut InputBaseState<Self>,
         offset: usize,
@@ -184,6 +194,10 @@ impl InputModeKind for EditorMode {
             .on_action(window.listener_for(entity, InputBaseState::on_action_toggle_code_actions))
             .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_definition))
             .on_action(window.listener_for(entity, InputBaseState::on_action_toggle_signature_help))
+            .on_action(window.listener_for(entity, InputBaseState::on_action_signature_help_next))
+            .on_action(
+                window.listener_for(entity, InputBaseState::on_action_signature_help_previous),
+            )
     }
 }
 

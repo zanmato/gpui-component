@@ -317,6 +317,16 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
     ) {
     }
 
+    /// Reacts to the cursor moving without an edit (click, arrow keys, drag),
+    /// so signature help can follow the call around the cursor.
+    fn on_cursor_moved(
+        _state: &mut InputBaseState<Self>,
+        _offset: usize,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
+    }
+
     /// Reacts to the pointer moving, for the hover popover.
     fn on_mouse_move(
         _state: &mut InputBaseState<Self>,

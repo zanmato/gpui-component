@@ -213,5 +213,6 @@ impl InputBaseState<EditorMode> {
     pub fn dismiss_lsp_overlays(&mut self, cx: &mut Context<Self>) {
         self.hide_context_menu(cx);
         self.clear_hover_state(cx);
+        self.dismiss_signature_help(cx);
     }
 }

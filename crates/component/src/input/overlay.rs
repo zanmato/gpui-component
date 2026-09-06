@@ -261,10 +261,13 @@ impl OverlayMode for crate::input::EditorMode {
                 open: snapshot.signature_help.open,
                 revision: snapshot.signature_help.revision,
             };
-            let help = state.read(cx).signature_help_state().help.clone();
-            lsp.signature_help.update(cx, |popover, cx| match help {
-                Some(help) => popover.show(help, cx),
-                None => popover.hide(cx),
+            let help = state.read(cx).signature_help_state().clone();
+            lsp.signature_help.update(cx, |popover, cx| {
+                if help.help.is_some() {
+                    popover.show(help, cx)
+                } else {
+                    popover.hide(cx)
+                }
             });
         }
 
