@@ -1,7 +1,7 @@
 use crate::input::InputModeKind;
 use crate::input::{
     Indent, IndentInline, InputBaseState, Outdent, OutdentInline, RopeExt, cursor::CursorSelection,
-    element::TextElement, layout::LastLayout, mode::LayoutMode, selection::CursorId,
+    element::TextElement, layout::LastLayout, mode::LayoutMode,
 };
 use gpui::{
     Bounds, Context, Hsla, Path, PathBuilder, Pixels, SharedString, TextRun, TextStyle, Window,
@@ -293,14 +293,10 @@ impl<M: InputModeKind> InputBaseState<M> {
         tab_indent: &str,
         tab_len: usize,
     ) -> (Vec<(std::ops::Range<usize>, String)>, Vec<CursorSelection>) {
-        // (id, start, end, start_row, end_row)
-        let mut selection_data: Vec<(CursorId, usize, usize, usize, usize)> =
-            Vec::with_capacity(self.selections.len());
         let mut rows: std::collections::HashSet<usize> = std::collections::HashSet::new();
         for sel in self.selections.iter() {
             let start_row = self.text.offset_to_point(sel.start).row;
             let end_row = self.text.offset_to_point(sel.end).row;
-            selection_data.push((sel.id, sel.start, sel.end, start_row, end_row));
             for row in start_row..=end_row {
                 rows.insert(row);
             }
@@ -309,50 +305,52 @@ impl<M: InputModeKind> InputBaseState<M> {
         let mut rows: Vec<usize> = rows.into_iter().collect();
         rows.sort_unstable();
 
-        let mut modified: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
         for row in rows {
             let line_start = self.text.line_start_offset(row);
             match direction {
                 IndentDirection::Indent => {
                     edits.push((line_start..line_start, tab_indent.to_string()));
-                    modified.insert(row);
                 }
                 IndentDirection::Outdent => {
-                    if line_start + tab_len <= self.text.len()
-                        && self.text.slice(line_start..line_start + tab_len) == tab_indent
+                    if self
+                        .text
+                        .slice(line_start..)
+                        .chars()
+                        .take(tab_indent.chars().count())
+                        .eq(tab_indent.chars())
                     {
                         edits.push((line_start..line_start + tab_len, String::new()));
-                        modified.insert(row);
                     }
                 }
             }
         }
 
-        let mut new_selections: Vec<CursorSelection> = Vec::with_capacity(selection_data.len());
-        for (id, start, end, start_row, end_row) in selection_data {
-            let lines_modified = (start_row..=end_row)
-                .filter(|row| modified.contains(row))
-                .count();
-            let start_offset = if modified.contains(&start_row) {
-                tab_len
-            } else {
-                0
-            };
-            let end_offset = lines_modified * tab_len;
-
-            let (new_start, new_end) = match direction {
-                IndentDirection::Indent => (start + start_offset, end + end_offset),
-                IndentDirection::Outdent => (
-                    start.saturating_sub(start_offset),
-                    end.saturating_sub(end_offset),
-                ),
-            };
-
-            let mut selection = CursorSelection::new(id, new_start, new_end);
-            selection.column_anchor = None;
-            new_selections.push(selection);
-        }
+        // Map both endpoints through every earlier edit, including edits belonging
+        // to other cursors. A point inside removed indentation stays on its line.
+        let map_offset = |offset: usize| match direction {
+            IndentDirection::Indent => {
+                offset + edits.partition_point(|(range, _)| range.start <= offset) * tab_len
+            }
+            IndentDirection::Outdent => {
+                let preceding = edits.partition_point(|(range, _)| range.end <= offset);
+                let partial = edits
+                    .get(preceding)
+                    .map_or(0, |(range, _)| offset.saturating_sub(range.start));
+                offset - preceding * tab_len - partial
+            }
+        };
+        let new_selections = self
+            .selections
+            .iter()
+            .map(|sel| {
+                let mut selection = *sel;
+                selection.start = map_offset(sel.start);
+                selection.end = map_offset(sel.end);
+                selection.column_anchor = None;
+                selection
+            })
+            .collect();
 
         (edits, new_selections)
     }
@@ -376,8 +374,12 @@ impl<M: InputModeKind> InputBaseState<M> {
                 IndentDirection::Outdent => {
                     let row = self.text.offset_to_point(cursor).row;
                     let start = self.text.line_start_offset(row);
-                    if start + tab_len <= self.text.len()
-                        && self.text.slice(start..start + tab_len) == tab_indent.as_ref()
+                    if self
+                        .text
+                        .slice(start..)
+                        .chars()
+                        .take(tab_indent.chars().count())
+                        .eq(tab_indent.chars())
                     {
                         ranges.push(start..start + tab_len);
                     }

@@ -1901,6 +1901,8 @@ impl<M: InputModeKind> InputBaseState<M> {
                 .display_row_column_to_offset(row, start_col);
             let sel_end = self.display_map.display_row_column_to_offset(row, end_col);
             let id = self.selections.generate_id();
+            let sel_start = self.text.clip_offset(sel_start, Bias::Left);
+            let sel_end = self.text.clip_offset(sel_end, Bias::Left);
             new_selections.push(CursorSelection::new(id, sel_start, sel_end));
         }
 
@@ -2331,9 +2333,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         requested_intent: Option<EditIntent>,
         selection_before: CursorSelection,
         selection_after: Option<CursorSelection>,
-    ) {
+    ) -> bool {
         if self.undo_manager.is_ignoring() {
-            return;
+            return false;
         }
 
         let range =
@@ -2367,6 +2369,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             self.undo_manager
                 .record_selections(vec![selection_before], vec![selection_after]);
         }
+        recorded
     }
 
     pub(super) fn undo(&mut self, _: &Undo, window: &mut Window, cx: &mut Context<Self>) {
@@ -2477,7 +2480,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.last_layout.as_ref().map(|l| l.line_height)
     }
 
-    /// Returns the current selection as a byte range into the text.
+    /// Returns the active selection as a byte range into the text.
+    ///
+    /// With multiple cursors, this reads only the active selection.
     ///
     /// The range is empty (`start == end`) when no text is selected; in
     /// that case the offset equals `cursor()`. Byte offsets are measured
@@ -2493,7 +2498,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         cx.notify();
     }
 
-    /// Set the selected range using UTF-8 byte offsets.
+    /// Set the selected range using UTF-8 byte offsets, removing additional cursors.
     ///
     /// Non-empty ranges expand to character boundaries. Empty ranges remain empty and are
     /// clipped to the preceding character boundary.
@@ -2673,8 +2678,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.undo_manager.break_transaction_coalescing();
         M::clear_inline_completion(self, cx);
 
-        // Like plain `select_to`: the offsets came from the text, not from a visual position.
-        self.cursor_line_end_affinity = false;
         let len = self.text.len();
         let new_selections: Vec<CursorSelection> = self
             .selections
@@ -2686,6 +2689,8 @@ impl<M: InputModeKind> InputBaseState<M> {
                 new_sel
             })
             .collect();
+        // Resolve targets using the old caret affinity before clearing it.
+        self.cursor_line_end_affinity = false;
         self.selections.replace_all(new_selections);
         self.selections.merge_overlapping();
 
@@ -3012,7 +3017,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
     }
 
-    /// Return the selected portion of the text, borrowed out of the [`Rope`]
+    /// Return the active selection's text, borrowed out of the [`Rope`]
     /// the state owns.
     ///
     /// See [`Self::selected_value`] when an owned string is wanted.
@@ -3120,11 +3125,13 @@ impl<M: InputModeKind> InputBaseState<M> {
             self.undo_manager.begin_transaction();
         }
 
+        let mut recorded = false;
         for (range, new_text) in &sorted {
             let old_text = self.text.clone();
             self.text.replace(range.clone(), new_text);
 
-            self.push_history(
+            M::adjust_annotations(self, range, new_text.len());
+            recorded |= self.push_history(
                 &old_text,
                 range,
                 new_text,
@@ -3181,14 +3188,16 @@ impl<M: InputModeKind> InputBaseState<M> {
         let mut used = vec![false; edit_results.len()];
         let mut new_selections: Vec<CursorSelection> = Vec::with_capacity(ascending.len());
         for selection in original_selections {
-            if let Some((index, (_, offset))) =
-                edit_results.iter().enumerate().find(|(index, (range, _))| {
-                    !used[*index] && range.start == selection.start && range.end == selection.end
+            if let Ok(index) = edit_results
+                .binary_search_by_key(&(selection.start, selection.end), |(range, _)| {
+                    (range.start, range.end)
                 })
+                && !used[index]
             {
+                let offset = edit_results[index].1;
                 used[index] = true;
                 let mut selection = selection;
-                selection.place_at(*offset, None);
+                selection.place_at(offset, None);
                 new_selections.push(selection);
             }
         }
@@ -3206,8 +3215,10 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         // Record the cursor snapshots for undo/redo restore.
         let selections_after: Vec<CursorSelection> = self.selections.iter().copied().collect();
-        self.undo_manager
-            .record_selections(selections_before, selections_after);
+        if recorded {
+            self.undo_manager
+                .record_selections(selections_before, selections_after);
+        }
 
         self.ime_marked_range.take();
         self.update_preferred_column();
@@ -3447,12 +3458,6 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
                 None,
             );
         }
-        // A commit ends the IME composition: macOS delivers `insertText:` for
-        // the confirmed candidate without a following `unmarkText`, so close
-        // the transaction here. Leaving it open would keep merging every later
-        // edit into the same change, which then carries the text and selection
-        // of the first composition.
-        self.undo_manager.commit_transaction();
         if let Some(diagnostics) = self.mode.diagnostics_mut() {
             diagnostics.reset(&self.text)
         }
@@ -3478,7 +3483,14 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         M::refresh_language_features(self, window, cx);
         self.set_cursor_to(new_offset);
         self.ime_marked_range.take();
+        // A commit ends the IME composition: macOS delivers `insertText:` for
+        // the confirmed candidate without a following `unmarkText`, so close
+        // the transaction here. Leaving it open would keep merging every later
+        // edit into the same change, which then carries the text and selection
+        // of the first composition.
         if ends_composition {
+            self.undo_manager
+                .record_selections(vec![selection_before], vec![*self.active_selection()]);
             self.undo_manager.commit_transaction();
         }
         self.update_preferred_column();
@@ -3593,14 +3605,17 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         if self.is_multi_line() {
             self.mode.update_auto_grow(&self.display_map);
         }
-        self.push_history(
+        if self.push_history(
             &old_text,
             &range,
             new_text,
             requested_intent,
             selection_before,
             Some(*self.active_selection()),
-        );
+        ) {
+            self.undo_manager
+                .record_selections(vec![selection_before], vec![*self.active_selection()]);
+        }
         if new_text.is_empty() {
             self.undo_manager.commit_transaction();
         }
@@ -5935,6 +5950,145 @@ mod tests {
             actual_cursors, expected_cursors,
             "Cursor mismatch:\nExpected: {expected_cursors:?}\nActual:   {actual_cursors:?}"
         );
+    }
+
+    #[gpui::test]
+    fn test_shift_end_respects_soft_wrap_end(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.set_value("abcdef ".repeat(30), window, cx);
+                state.display_map.on_layout_changed(Some(px(60.)), cx);
+                let line = state.display_map.line(0).unwrap();
+                assert!(line.wrapped_lines.len() > 1);
+                let boundary = line.wrapped_lines[0].end;
+                state.move_to_with_affinity(boundary, None, true, cx);
+                state.select_to_end_of_line(&SelectToEndOfLine, window, cx);
+                assert_eq!(state.selected_range(), boundary..state.text.len());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_outdent_unindented_unicode_is_unchanged(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "|你好\n|世界");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.outdent(false, window, cx);
+                state.outdent(true, window, cx);
+            });
+        });
+        assert_cursors(&mut cx, &view.input, "|你好\n|世界");
+    }
+
+    #[gpui::test]
+    fn test_column_selection_stays_on_unicode_boundaries(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "ab\n你好\ncd");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.build_columnar_selection(1, 11, cx);
+                let text = state.value();
+                for sel in state.selections.iter() {
+                    assert!(text.is_char_boundary(sel.start));
+                    assert!(text.is_char_boundary(sel.end));
+                }
+                state.replace_text_in_range(None, "X", window, cx);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_editor_decorations_follow_typing(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.set_value("abc def", window, cx);
+                state.create_decorations_collection(
+                    vec![crate::input::TextDecoration::new(
+                        4..7,
+                        gpui::HighlightStyle::default(),
+                    )],
+                    cx,
+                );
+                state.set_selected_range(0..0, cx);
+                state.replace_text_in_range(None, "X", window, cx);
+                let layers = state.extras.decoration_layers();
+                assert_eq!(layers.into_iter().flatten().next().unwrap().range, 5..8);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_block_indent_tracks_all_preceding_edits(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "|ab\n|cd\n|ef");
+        cx.update(|window, cx| {
+            view.input
+                .update(cx, |state, cx| state.indent(true, window, cx));
+        });
+        assert_cursors(&mut cx, &view.input, "  |ab\n  |cd\n  |ef");
+        cx.update(|window, cx| {
+            view.input
+                .update(cx, |state, cx| state.outdent(true, window, cx));
+        });
+        assert_cursors(&mut cx, &view.input, "|ab\n|cd\n|ef");
+    }
+
+    #[gpui::test]
+    fn test_block_outdent_clamps_cursor_inside_indent(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "ab\n | cd");
+        cx.update(|window, cx| {
+            view.input
+                .update(cx, |state, cx| state.outdent(true, window, cx));
+        });
+        assert_cursors(&mut cx, &view.input, "ab\n|cd");
+    }
+
+    #[gpui::test]
+    fn test_ime_restores_original_selection(cx: &mut TestAppContext) {
+        let view = InputView::build(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.set_value("abc", window, cx);
+                state.set_selected_range(1..2, cx);
+                state.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+                state.replace_text_in_range(None, "你", window, cx);
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.value(), "abc");
+                assert_eq!(state.selected_range(), 1..2);
+                state.redo(&Redo, window, cx);
+                assert_eq!(state.selected_range(), 4..4);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_noop_does_not_change_redo_selection(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.set_value("abc", window, cx);
+                state.set_selected_range(1..1, cx);
+                state.replace_text_in_range(None, "X", window, cx);
+                state.set_selected_range(0..0, cx);
+                state.replace_text_in_range(None, "", window, cx);
+                state.undo(&Undo, window, cx);
+                state.redo(&Redo, window, cx);
+                assert_eq!(state.value(), "aXbc");
+                assert_eq!(state.selected_range(), 2..2);
+            });
+        });
     }
 
     #[gpui::test]
