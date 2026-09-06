@@ -197,15 +197,19 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("shift-alt-left", SelectLeft, Some(CONTEXT)),
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         KeyBinding::new("shift-alt-right", SelectRight, Some(CONTEXT)),
-        // Linux uses the macOS combination with Ctrl in place of Cmd.
+        // Avoid Ctrl+Alt+arrows on Linux, where desktops may reserve them.
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-alt-up", AddCursorAbove, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-alt-down", AddCursorBelow, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         KeyBinding::new("ctrl-alt-up", AddCursorAbove, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        KeyBinding::new("shift-alt-up", AddCursorAbove, Some(CONTEXT)),
+        #[cfg(target_os = "windows")]
         KeyBinding::new("ctrl-alt-down", AddCursorBelow, Some(CONTEXT)),
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        KeyBinding::new("shift-alt-down", AddCursorBelow, Some(CONTEXT)),
         KeyBinding::new("home", MoveHome, Some(CONTEXT)),
         KeyBinding::new("end", MoveEnd, Some(CONTEXT)),
         KeyBinding::new("shift-home", SelectToStartOfLine, Some(CONTEXT)),
@@ -1999,9 +2003,11 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         // Multi-cursor placement, multi-line only.
         if self.is_multi_line() && event.button == MouseButton::Left {
-            if event.modifiers.alt && event.modifiers.shift {
-                // Begin an alt+shift columnar selection. Mark selecting so the
-                // drag handler extends the block instead of bailing early.
+            if event.modifiers.alt
+                && (event.modifiers.shift || (cfg!(target_os = "linux") && event.modifiers.control))
+            {
+                // Alt+Shift starts a block; Linux also accepts Ghostty's Ctrl+Alt.
+                // Mark selecting so the drag handler extends the block.
                 self.column_select_start = Some(offset);
                 self.selecting = true;
                 self.move_to_with_affinity(offset, None, line_end_affinity, cx);
@@ -5993,44 +5999,72 @@ mod tests {
         cx.update(crate::init);
         let view = InputView::<EditorMode>::new(cx);
         let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
-        setup_cursors(&mut cx, &view.input, "|abcd\nabcd\nabcd");
-        cx.update(|window, cx| {
-            view.input.update(cx, |state, cx| state.focus(window, cx));
-        });
-        let (start, end) = view.input.read_with(&cx, |state, _| {
-            let layout = state.last_layout.as_ref().unwrap();
-            let origin = state.last_bounds.unwrap().origin;
-            let position = |row: usize, col| {
-                let local = layout.lines[row]
-                    .position_for_index(col, layout, false)
-                    .unwrap();
-                origin
-                    + point(
-                        layout.line_number_width + local.x,
-                        layout.line_height * (row as f32 + 0.5),
-                    )
-            };
-            (position(0, 1), position(2, 3))
-        });
-        let modifiers = gpui::Modifiers {
-            alt: true,
-            ..Default::default()
-        };
-        cx.simulate_mouse_down(start, MouseButton::Left, modifiers);
-        cx.simulate_mouse_move(end, MouseButton::Left, modifiers);
-        cx.simulate_mouse_up(end, MouseButton::Left, modifiers);
-        view.input.read_with(&cx, |state, _| {
-            let ranges: Vec<_> = state
-                .selections
-                .iter()
-                .map(|sel| sel.start..sel.end)
-                .collect();
-            assert_eq!(ranges, vec![1..3, 6..8, 11..13]);
-        });
-        // Moving after release must leave the block intact.
-        cx.simulate_mouse_move(start, None, modifiers);
-        cx.simulate_keystrokes("x");
-        assert_cursors(&mut cx, &view.input, "ax|d\nax|d\nax|d");
+        for modifiers in [
+            gpui::Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+            gpui::Modifiers {
+                alt: true,
+                shift: true,
+                ..Default::default()
+            },
+            #[cfg(target_os = "linux")]
+            gpui::Modifiers {
+                alt: true,
+                control: true,
+                ..Default::default()
+            },
+        ] {
+            setup_cursors(&mut cx, &view.input, "|abcd\nabcd\nabcd");
+            cx.update(|window, cx| {
+                view.input.update(cx, |state, cx| state.focus(window, cx));
+            });
+            let (start, end) = view.input.read_with(&cx, |state, _| {
+                let layout = state.last_layout.as_ref().unwrap();
+                let origin = state.last_bounds.unwrap().origin;
+                let position = |row: usize, col| {
+                    let local = layout.lines[row]
+                        .position_for_index(col, layout, false)
+                        .unwrap();
+                    origin
+                        + point(
+                            layout.line_number_width + local.x,
+                            layout.line_height * (row as f32 + 0.5),
+                        )
+                };
+                (position(0, 1), position(2, 3))
+            });
+            // A cached Ctrl-hover definition must not steal a column gesture.
+            cx.update(|_, cx| {
+                view.input.update(cx, |state, _| {
+                    state.extras.hover_definition.update(
+                        0..4,
+                        vec![lsp_types::LocationLink {
+                            origin_selection_range: None,
+                            target_uri: "file:///tmp/column-selection.rs".parse().unwrap(),
+                            target_range: Default::default(),
+                            target_selection_range: Default::default(),
+                        }],
+                    );
+                });
+            });
+            cx.simulate_mouse_down(start, MouseButton::Left, modifiers);
+            cx.simulate_mouse_move(end, MouseButton::Left, modifiers);
+            cx.simulate_mouse_up(end, MouseButton::Left, modifiers);
+            view.input.read_with(&cx, |state, _| {
+                let ranges: Vec<_> = state
+                    .selections
+                    .iter()
+                    .map(|sel| sel.start..sel.end)
+                    .collect();
+                assert_eq!(ranges, vec![1..3, 6..8, 11..13]);
+            });
+            // Moving after release must leave the block intact.
+            cx.simulate_mouse_move(start, None, modifiers);
+            cx.simulate_keystrokes("x");
+            assert_cursors(&mut cx, &view.input, "ax|d\nax|d\nax|d");
+        }
     }
 
     #[gpui::test]
@@ -6157,14 +6191,18 @@ mod tests {
         });
         #[cfg(target_os = "macos")]
         cx.simulate_keystrokes("cmd-alt-up");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         cx.simulate_keystrokes("ctrl-alt-up");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        cx.simulate_keystrokes("alt-shift-up");
         view.input
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 2));
         #[cfg(target_os = "macos")]
         cx.simulate_keystrokes("cmd-alt-down");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         cx.simulate_keystrokes("ctrl-alt-down");
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        cx.simulate_keystrokes("alt-shift-down");
         view.input
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 3));
         cx.simulate_keystrokes("x");
@@ -6203,7 +6241,10 @@ mod tests {
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| state.focus(window, cx));
         });
+        #[cfg(target_os = "windows")]
         cx.simulate_keystrokes("ctrl-alt-up");
+        #[cfg(not(target_os = "windows"))]
+        cx.simulate_keystrokes("alt-shift-up");
         #[cfg(target_os = "linux")]
         cx.simulate_keystrokes("shift-right");
         #[cfg(not(target_os = "linux"))]

@@ -2439,7 +2439,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
             cx.notify();
         });
 
-        if let Some(hitbox) = prepaint.hover_definition_hitbox.as_ref() {
+        if let Some(hitbox) = prepaint.hover_definition_hitbox.as_ref()
+            && !window.modifiers().alt
+        {
             window.set_cursor_style(gpui::CursorStyle::PointingHand, &hitbox);
         }
 
