@@ -193,23 +193,19 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("shift-down", SelectDown, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         KeyBinding::new("shift-alt-left", SelectLeft, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         KeyBinding::new("shift-alt-right", SelectRight, Some(CONTEXT)),
-        // Follow the platform defaults used by VS Code and Zed.
+        // Linux uses the macOS combination with Ctrl in place of Cmd.
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-alt-up", AddCursorAbove, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-alt-down", AddCursorBelow, Some(CONTEXT)),
-        #[cfg(target_os = "windows")]
+        #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-alt-up", AddCursorAbove, Some(CONTEXT)),
-        #[cfg(target_os = "windows")]
+        #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-alt-down", AddCursorBelow, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        KeyBinding::new("shift-alt-up", AddCursorAbove, Some(CONTEXT)),
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        KeyBinding::new("shift-alt-down", AddCursorBelow, Some(CONTEXT)),
         KeyBinding::new("home", MoveHome, Some(CONTEXT)),
         KeyBinding::new("end", MoveEnd, Some(CONTEXT)),
         KeyBinding::new("shift-home", SelectToStartOfLine, Some(CONTEXT)),
@@ -222,11 +218,11 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("shift-cmd-left", SelectToStartOfLine, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("shift-cmd-right", SelectToEndOfLine, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         KeyBinding::new("alt-shift-left", SelectToPreviousWordStart, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-left", SelectToPreviousWordStart, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         KeyBinding::new("alt-shift-right", SelectToNextWordEnd, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-right", SelectToNextWordEnd, Some(CONTEXT)),
@@ -6161,18 +6157,14 @@ mod tests {
         });
         #[cfg(target_os = "macos")]
         cx.simulate_keystrokes("cmd-alt-up");
-        #[cfg(target_os = "windows")]
+        #[cfg(not(target_os = "macos"))]
         cx.simulate_keystrokes("ctrl-alt-up");
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        cx.simulate_keystrokes("alt-shift-up");
         view.input
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 2));
         #[cfg(target_os = "macos")]
         cx.simulate_keystrokes("cmd-alt-down");
-        #[cfg(target_os = "windows")]
+        #[cfg(not(target_os = "macos"))]
         cx.simulate_keystrokes("ctrl-alt-down");
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        cx.simulate_keystrokes("alt-shift-down");
         view.input
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 3));
         cx.simulate_keystrokes("x");
@@ -6187,27 +6179,34 @@ mod tests {
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| state.focus(window, cx));
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         cx.simulate_keystrokes("alt-shift-right");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         cx.simulate_keystrokes("ctrl-shift-right");
+        cx.simulate_keystrokes("x");
+        assert_cursors(&mut cx, &view.input, "one x|\none x|");
+        setup_cursors(&mut cx, &view.input, "one two|\none two|");
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        cx.simulate_keystrokes("alt-shift-left");
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        cx.simulate_keystrokes("ctrl-shift-left");
         cx.simulate_keystrokes("x");
         assert_cursors(&mut cx, &view.input, "one x|\none x|");
     }
 
     #[cfg(not(target_os = "macos"))]
     #[gpui::test]
-    fn test_multi_cursor_alt_shift_horizontal_dispatch(cx: &mut TestAppContext) {
+    fn test_multi_cursor_horizontal_selection_dispatch(cx: &mut TestAppContext) {
         let view = InputView::<EditorMode>::new(cx);
         let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
         setup_cursors(&mut cx, &view.input, "ab\na|b");
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| state.focus(window, cx));
         });
-        #[cfg(target_os = "windows")]
         cx.simulate_keystrokes("ctrl-alt-up");
-        #[cfg(not(target_os = "windows"))]
-        cx.simulate_keystrokes("alt-shift-up");
+        #[cfg(target_os = "linux")]
+        cx.simulate_keystrokes("shift-right");
+        #[cfg(not(target_os = "linux"))]
         cx.simulate_keystrokes("alt-shift-right");
         view.input.read_with(&cx, |state, _| {
             assert_eq!(
@@ -6219,6 +6218,9 @@ mod tests {
                 vec![4..5, 1..2]
             );
         });
+        #[cfg(target_os = "linux")]
+        cx.simulate_keystrokes("shift-left shift-left");
+        #[cfg(not(target_os = "linux"))]
         cx.simulate_keystrokes("alt-shift-left alt-shift-left");
         view.input.read_with(&cx, |state, _| {
             assert_eq!(
