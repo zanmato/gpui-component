@@ -430,6 +430,7 @@ impl<M: InputModeKind> TextElement<M> {
                 state.update(cx, |state, _| {
                     state.auto_scroll.stop();
                     state.selecting = false;
+                    state.column_select_start = None;
                 });
             }
         });

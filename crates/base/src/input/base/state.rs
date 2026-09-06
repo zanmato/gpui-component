@@ -1985,6 +1985,9 @@ impl<M: InputModeKind> InputBaseState<M> {
                 return;
             } else if event.modifiers.alt {
                 self.add_cursor_at(offset, cx);
+                // Keep click-to-add behavior, but use this press as the block
+                // anchor if the user continues dragging with the left button.
+                self.column_select_start = Some(offset);
                 return;
             }
         }
@@ -5957,6 +5960,105 @@ mod tests {
             actual_cursors, expected_cursors,
             "Cursor mismatch:\nExpected: {expected_cursors:?}\nActual:   {actual_cursors:?}"
         );
+    }
+
+    #[gpui::test]
+    fn test_alt_drag_selects_a_block_and_replaces_each_row(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "|abcd\nabcd\nabcd");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        let (start, end) = view.input.read_with(&cx, |state, _| {
+            let layout = state.last_layout.as_ref().unwrap();
+            let origin = state.last_bounds.unwrap().origin;
+            let position = |row: usize, col| {
+                let local = layout.lines[row]
+                    .position_for_index(col, layout, false)
+                    .unwrap();
+                origin
+                    + point(
+                        layout.line_number_width + local.x,
+                        layout.line_height * (row as f32 + 0.5),
+                    )
+            };
+            (position(0, 1), position(2, 3))
+        });
+        let modifiers = gpui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        cx.simulate_mouse_down(start, MouseButton::Left, modifiers);
+        cx.simulate_mouse_move(end, MouseButton::Left, modifiers);
+        cx.simulate_mouse_up(end, MouseButton::Left, modifiers);
+        view.input.read_with(&cx, |state, _| {
+            let ranges: Vec<_> = state
+                .selections
+                .iter()
+                .map(|sel| sel.start..sel.end)
+                .collect();
+            assert_eq!(ranges, vec![1..3, 6..8, 11..13]);
+        });
+        // Moving after release must leave the block intact.
+        cx.simulate_mouse_move(start, None, modifiers);
+        cx.simulate_keystrokes("x");
+        assert_cursors(&mut cx, &view.input, "ax|d\nax|d\nax|d");
+    }
+
+    #[gpui::test]
+    fn test_alt_drag_extends_upward_from_an_existing_cursor(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "abcd\nabcd\na|bcd");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        let (start, end) = view.input.read_with(&cx, |state, _| {
+            let layout = state.last_layout.as_ref().unwrap();
+            let origin = state.last_bounds.unwrap().origin;
+            let local = layout.lines[0]
+                .position_for_index(1, layout, false)
+                .unwrap();
+            let x = layout.line_number_width + local.x;
+            (
+                origin + point(x, layout.line_height * 2.5),
+                origin + point(x, layout.line_height * 0.5),
+            )
+        });
+        let modifiers = gpui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        cx.simulate_mouse_down(start, MouseButton::Left, modifiers);
+        cx.simulate_mouse_move(end, MouseButton::Left, modifiers);
+        cx.simulate_mouse_up(end, MouseButton::Left, modifiers);
+        assert_cursors(&mut cx, &view.input, "a|bcd\na|bcd\na|bcd");
+    }
+
+    #[gpui::test]
+    fn test_alt_mouse_release_outside_editor_ends_column_selection(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "|abcd\nabcd");
+        let position = view.input.read_with(&cx, |state, _| {
+            let layout = state.last_layout.as_ref().unwrap();
+            state.last_bounds.unwrap().origin
+                + point(layout.line_number_width + px(2.), layout.line_height * 0.5)
+        });
+        let modifiers = gpui::Modifiers {
+            alt: true,
+            ..Default::default()
+        };
+        cx.simulate_mouse_down(position, MouseButton::Left, modifiers);
+        cx.simulate_mouse_up(point(px(-100.), px(-100.)), MouseButton::Left, modifiers);
+        view.input.read_with(&cx, |state, _| {
+            assert!(!state.selecting);
+            assert!(state.column_select_start.is_none());
+        });
     }
 
     #[gpui::test]
