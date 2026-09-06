@@ -193,6 +193,10 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("shift-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("shift-up", SelectUp, Some(CONTEXT)),
         KeyBinding::new("shift-down", SelectDown, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("shift-alt-left", SelectLeft, Some(CONTEXT)),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("shift-alt-right", SelectRight, Some(CONTEXT)),
         KeyBinding::new("shift-alt-up", AddCursorAbove, Some(CONTEXT)),
         KeyBinding::new("shift-alt-down", AddCursorBelow, Some(CONTEXT)),
         KeyBinding::new("home", MoveHome, Some(CONTEXT)),
@@ -3820,7 +3824,16 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
             )
             .on_mouse_move(window.listener_for(&entity, InputBaseState::on_mouse_move))
             .on_scroll_wheel(window.listener_for(&entity, InputBaseState::on_scroll_wheel))
-            .when(!self.disabled, |this| this.cursor_text())
+            .when(self.is_multi_line() && !self.disabled, |this| {
+                this.on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
+            })
+            .when(!self.disabled, |this| {
+                if self.is_multi_line() && window.modifiers().alt {
+                    this.cursor_crosshair()
+                } else {
+                    this.cursor_text()
+                }
+            })
             .flex_1()
             .when(self.is_multi_line(), |this| this.h_full())
             .flex_grow_1()
@@ -6074,6 +6087,41 @@ mod tests {
             .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 2));
         cx.simulate_keystrokes("x");
         assert_cursors(&mut cx, &view.input, "ax|b\nax|b\nab");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn test_multi_cursor_alt_shift_horizontal_dispatch(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "ab\na|b");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.simulate_keystrokes("alt-shift-up alt-shift-right");
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(
+                state
+                    .selections
+                    .iter()
+                    .map(|s| s.start..s.end)
+                    .collect::<Vec<_>>(),
+                vec![4..5, 1..2]
+            );
+        });
+        cx.simulate_keystrokes("alt-shift-left alt-shift-left");
+        view.input.read_with(&cx, |state, _| {
+            assert_eq!(
+                state
+                    .selections
+                    .iter()
+                    .map(|s| s.start..s.end)
+                    .collect::<Vec<_>>(),
+                vec![3..4, 0..1]
+            );
+        });
+        cx.simulate_keystrokes("x");
+        assert_cursors(&mut cx, &view.input, "x|b\nx|b");
     }
 
     #[gpui::test]
