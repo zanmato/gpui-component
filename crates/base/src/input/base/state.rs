@@ -1517,12 +1517,16 @@ impl<M: InputModeKind> InputBaseState<M> {
                 sel.start..sel.end
             };
             let (start, end) = (range.start.min(range.end), range.start.max(range.end));
-            new_selections.push(CursorSelection::new(
-                self.selections.generate_id(),
-                start,
-                end,
-            ));
+            let mut selection = *sel;
+            selection.start = start;
+            selection.end = end;
+            new_selections.push(selection);
         }
+        // Capture the user's selections before expanding or merging deletion
+        // ranges. The edit ranges cannot reconstruct their original carets.
+        self.undo_manager.begin_transaction_with(intent);
+        self.undo_manager
+            .record_selections(cursors.clone(), cursors.clone());
         self.selections.replace_all(new_selections);
         self.undo_manager.set_pending_intent(intent);
 
@@ -1530,6 +1534,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.silent_replace_text = silent;
         self.replace_text_in_range(None, "", window, cx);
         self.silent_replace_text = was_silent;
+        self.undo_manager
+            .record_selections(cursors, self.selections.iter().copied().collect());
+        self.undo_manager.commit_transaction();
         self.pause_blink_cursor(cx);
     }
 
@@ -5950,6 +5957,34 @@ mod tests {
             actual_cursors, expected_cursors,
             "Cursor mismatch:\nExpected: {expected_cursors:?}\nActual:   {actual_cursors:?}"
         );
+    }
+
+    #[gpui::test]
+    fn test_word_delete_undo_restores_caret(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "hello|");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.delete_previous_word(&DeleteToPreviousWordStart, window, cx);
+                state.undo(&Undo, window, cx);
+                assert_eq!(state.selected_range(), 5..5);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn test_merged_delete_undo_restores_all_carets(cx: &mut TestAppContext) {
+        let view = multi_line(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "a|b|c");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.backspace(&Backspace, window, cx);
+                state.undo(&Undo, window, cx);
+            });
+        });
+        assert_cursors(&mut cx, &view.input, "a|b|c");
     }
 
     #[gpui::test]
