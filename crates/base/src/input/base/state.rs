@@ -6,8 +6,8 @@ use gpui::TextAlign;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
     EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
+    Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
     UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _, px,
 };
 use ropey::{Rope, RopeSlice};
@@ -616,6 +616,17 @@ impl<M: InputModeKind> InputBaseState<M> {
         let undo_manager = UndoManager::new();
 
         let _subscriptions = vec![
+            // Key bindings can consume events before on_key_down. Observe input
+            // before action dispatch so every keystroke resets the blink delay.
+            cx.intercept_keystrokes({
+                let focus_handle = focus_handle.clone();
+                let blink_cursor = blink_cursor.downgrade();
+                move |_, window, cx| {
+                    if focus_handle.is_focused(window) {
+                        _ = blink_cursor.update(cx, |cursor, cx| cursor.pause(cx));
+                    }
+                }
+            }),
             // Observe the blink cursor to repaint the view when it changes.
             cx.observe(&blink_cursor, |_, _, cx| cx.notify()),
             // Blink the cursor when the window is active, pause when it's not.
@@ -1810,6 +1821,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             return;
         }
 
+        self.pause_blink_cursor(cx);
         // Changing the cursor set ends the editing gesture that came before it.
         self.undo_manager.break_transaction_coalescing();
 
@@ -2700,6 +2712,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         f: impl Fn(&Self, &CursorSelection) -> usize,
         cx: &mut Context<Self>,
     ) {
+        self.pause_blink_cursor(cx);
         self.undo_manager.break_transaction_coalescing();
         M::clear_inline_completion(self, cx);
 
@@ -2880,10 +2893,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.blink_cursor.update(cx, |cursor, cx| {
             cursor.pause(cx);
         });
-    }
-
-    pub(super) fn on_key_down(&mut self, _: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.pause_blink_cursor(cx);
     }
 
     pub(super) fn on_drag_move(
@@ -3361,9 +3370,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         // not the platform follows up with `unmark_text`.
         let ends_composition = self.ime_marked_range.is_some();
 
-        if self.blink_cursor.read(cx).visible() {
-            self.pause_blink_cursor(cx);
-        }
+        self.pause_blink_cursor(cx);
 
         // NOTE: The normalization keeps the UTF-16 length, but may change the
         // UTF-8 byte length, so all the byte-offset calculations below must
@@ -3816,7 +3823,6 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
             .on_action(window.listener_for(&entity, InputBaseState::copy))
             .on_action(window.listener_for(&entity, InputBaseState::on_action_search))
             .on_action(window.listener_for(&entity, InputBaseState::on_action_replace))
-            .on_key_down(window.listener_for(&entity, InputBaseState::on_key_down))
             .on_mouse_down(
                 MouseButton::Left,
                 window.listener_for(&entity, InputBaseState::on_mouse_down),
@@ -6082,6 +6088,66 @@ mod tests {
         view.input.read_with(&cx, |state, _| {
             assert!(!state.selecting);
             assert!(state.column_select_start.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn test_consumed_keystrokes_keep_cursor_visible(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "a|b");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.pause_blink_cursor(cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(300));
+        cx.run_until_parked();
+        view.input.read_with(&cx, |state, cx| {
+            assert!(!state.blink_cursor.read(cx).visible());
+        });
+        // Copy consumes its shortcut without editing text or moving selections.
+        for _ in 0..5 {
+            #[cfg(target_os = "macos")]
+            cx.simulate_keystrokes("cmd-c");
+            #[cfg(not(target_os = "macos"))]
+            cx.simulate_keystrokes("ctrl-c");
+            cx.run_until_parked();
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(200));
+            cx.run_until_parked();
+            view.input.read_with(&cx, |state, cx| {
+                assert!(state.blink_cursor.read(cx).visible());
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn test_multi_cursor_actions_reveal_hidden_carets(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "ab\na|b\nab");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                // Start each action in the hidden phase without depending on a
+                // key-down listener: actions and text input also arrive directly.
+                for action in 0..6 {
+                    state.blink_cursor = cx.new(|_| BlinkCursor::new());
+                    assert!(!state.blink_cursor.read(cx).visible());
+                    match action {
+                        0 => state.add_cursor_above(&AddCursorAbove, window, cx),
+                        1 => state.add_cursor_below(&AddCursorBelow, window, cx),
+                        2 => state.select_up(&SelectUp, window, cx),
+                        3 => state.select_down(&SelectDown, window, cx),
+                        4 => state.replace_text_in_range(None, "x", window, cx),
+                        _ => state.backspace(&Backspace, window, cx),
+                    }
+                    assert!(state.blink_cursor.read(cx).visible(), "action {action}");
+                }
+            });
         });
     }
 
