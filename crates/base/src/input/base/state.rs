@@ -5960,6 +5960,46 @@ mod tests {
     }
 
     #[gpui::test]
+    fn test_multi_cursor_keyboard_dispatch(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "ab\na|b\nab");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        cx.simulate_keystrokes("alt-shift-up");
+        view.input
+            .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 2));
+        cx.simulate_keystrokes("x");
+        assert_cursors(&mut cx, &view.input, "ax|b\nax|b\nab");
+    }
+
+    #[gpui::test]
+    fn test_multi_cursor_alt_click_dispatch(cx: &mut TestAppContext) {
+        cx.update(crate::init);
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "a|b\nab\nab");
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        let position = view.input.read_with(&cx, |state, _| {
+            let bounds = state.last_bounds.unwrap();
+            let layout = state.last_layout.as_ref().unwrap();
+            bounds.origin + point(layout.line_number_width + px(2.), layout.line_height * 1.5)
+        });
+        cx.simulate_click(
+            position,
+            gpui::Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+        );
+        view.input
+            .read_with(&cx, |state, _| assert_eq!(state.selections.len(), 2));
+    }
+
+    #[gpui::test]
     fn test_word_delete_undo_restores_caret(cx: &mut TestAppContext) {
         let view = multi_line(cx);
         let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
