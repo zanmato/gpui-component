@@ -2086,7 +2086,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
         let state = self.state.read(cx);
-        let line_numbers = if state.mode.line_number() {
+        // One line has no gutter to number and no other line to set the
+        // active one apart from, so a single-line editor skips both.
+        let line_numbers = if state.mode.line_number() && state.is_multi_line() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
             let other_line_runs = vec![TextRun {
                 len: line_number_len,
