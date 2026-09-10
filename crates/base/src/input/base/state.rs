@@ -349,6 +349,10 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(crate) extras: M::Extras,
     pub(super) focus_handle: FocusHandle,
     pub(super) mode: LayoutMode,
+    /// Whether the input spans more than one line. Seeded from the mode
+    /// marker; a code editor may lower it to one line, see
+    /// [`InputBaseState::<crate::input::EditorMode>::single_line`].
+    pub(super) multi_line: bool,
     pub(super) text: Rope,
     /// Monotonic version of `text`, see [`Self::document_version`].
     pub(super) document_version: u64,
@@ -571,11 +575,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         }
     }
 
-    /// Whether this input spans more than one line.
-    ///
-    /// Answered by the mode marker, which is fixed when the state is built.
-    /// [`LayoutMode`] holds the row counts and growth policy, not the kind.
-    #[inline]
     /// Whether this input paints scrollbars.
     ///
     /// Only a multi-line input can scroll: a single-line input keeps its
@@ -587,14 +586,22 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.is_multi_line()
     }
 
+    /// Whether this input spans more than one line.
+    ///
+    /// Seeded from the mode marker when the state is built. A text field is
+    /// always one line and a textarea always several; a code editor starts
+    /// multi-line and may be lowered to one line with
+    /// [`InputBaseState::<crate::input::EditorMode>::single_line`].
+    /// [`LayoutMode`] holds the row counts and growth policy, not this.
+    #[inline]
     pub fn is_multi_line(&self) -> bool {
-        M::MULTI_LINE
+        self.multi_line
     }
 
     /// Whether this input is a single-line text field. See [`Self::is_multi_line`].
     #[inline]
     pub fn is_single_line(&self) -> bool {
-        !M::MULTI_LINE
+        !self.multi_line
     }
 
     /// Whether this input is a source-code editor.
@@ -722,6 +729,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             number_min: None,
             number_max: None,
             mode: LayoutMode::default(),
+            multi_line: M::MULTI_LINE,
             last_layout: None,
             last_bounds: None,
             last_selected_range: None,
@@ -5758,6 +5766,66 @@ mod tests {
     }
 
     #[gpui::test]
+    fn test_single_line_editor_keeps_one_line_and_submits_on_enter(cx: &mut TestAppContext) {
+        let input_view = InputView::build_editor(cx, |state| state.single_line(true));
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                assert!(state.is_single_line());
+                assert!(!state.is_multi_line());
+                assert!(state.is_code_editor(), "the language features stay");
+                assert!(!state.shows_scrollbar());
+                assert!(!state.presentation().is_multi_line());
+
+                // Pasted newlines fold onto the one line, as in a text field.
+                state.replace_text_in_range(None, "SELECT 1\nFROM t\r\n", window, cx);
+                assert_eq!(state.value(), "SELECT 1FROM t");
+
+                // Enter confirms instead of breaking the line.
+                let before = state.value();
+                state.enter(
+                    &Enter {
+                        secondary: false,
+                        shift: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(state.value(), before);
+                state.enter(
+                    &Enter {
+                        secondary: false,
+                        shift: true,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(state.value(), before, "shift+enter must not add a line");
+
+                // Going back to a document restores multi-line editing.
+                state.set_single_line(false, window, cx);
+                assert!(state.is_multi_line());
+                state.enter(
+                    &Enter {
+                        secondary: false,
+                        shift: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(state.value().contains('\n'));
+
+                // And lowering it again folds the document back onto one line.
+                state.set_single_line(true, window, cx);
+                assert!(state.is_single_line());
+                assert!(!state.value().contains('\n'));
+            });
+        });
+    }
+
+    #[gpui::test]
     fn test_undo_manager_blur_commits_the_typing_session(cx: &mut TestAppContext) {
         let input_view = InputView::build(cx, |state| state);
         let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
@@ -9707,6 +9775,51 @@ impl InputBaseState<crate::input::EditorMode> {
             *highlighter.borrow_mut() = None;
         }
         self
+    }
+
+    /// Lay the editor out as one line, like a text field that highlights.
+    ///
+    /// A URL bar or an inline cell editor wants syntax colours without a
+    /// document around them. Single line turns off the gutter, soft wrap,
+    /// the search panel, vertical scrolling and the empty space past the
+    /// last line, strips newlines from typed or pasted text, and makes
+    /// `Enter` submit instead of breaking the line. The language features
+    /// stay: highlighting, diagnostics and completion keep working.
+    ///
+    /// See [`Self::set_single_line`] to change it after construction.
+    pub fn single_line(mut self, single_line: bool) -> Self {
+        self.multi_line = !single_line;
+        if single_line {
+            self.soft_wrap = false;
+            self.searchable = false;
+        }
+        self
+    }
+
+    /// Change the single-line layout after construction. See [`Self::single_line`].
+    ///
+    /// Lowering a document to one line folds its text onto that line, which
+    /// drops the undo history as [`Self::set_value`] does.
+    pub fn set_single_line(
+        &mut self,
+        single_line: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.multi_line == !single_line {
+            return;
+        }
+        self.multi_line = !single_line;
+        if single_line {
+            self.soft_wrap = false;
+            self.searchable = false;
+            let text = self.text.to_string();
+            if text.contains(['\n', '\r']) {
+                self.set_value(text.replace(['\n', '\r'], ""), window, cx);
+            }
+        }
+        self.reset_scroll_to_start();
+        cx.notify();
     }
 
     /// The current language name, e.g. `"rust"`.

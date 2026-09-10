@@ -118,6 +118,28 @@ let editor = cx.new(|cx| {
 });
 ```
 
+### Single line
+
+A URL bar or an inline cell editor wants syntax colours without a document
+around them. `single_line(true)` lays the editor out as one line: no gutter,
+no soft wrap, no search panel, no vertical scrolling or empty space past the
+last line. Typed or pasted newlines fold onto the line and `Enter` submits
+instead of breaking it. Highlighting, diagnostics and completion keep
+working.
+
+```rust
+let url = cx.new(|cx| {
+    EditorState::new(window, cx)
+        .language("url")
+        .single_line(true)
+        .placeholder("Enter request URL")
+});
+```
+
+Use `set_single_line(single_line, window, cx)` to change it after
+construction. Lowering a document to one line folds its text onto that line
+and drops the undo history, as `set_value` does.
+
 ## Keyboard shortcuts and column selection
 
 These defaults apply while the editor is focused. On macOS, Option is the Alt

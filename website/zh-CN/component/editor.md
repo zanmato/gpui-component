@@ -104,6 +104,21 @@ let editor = cx.new(|cx| {
 });
 ```
 
+### 单行模式
+
+URL 栏或表格内联单元格编辑器只需要语法着色，不需要完整的文档编辑区。`single_line(true)` 会将 Editor 按单行布局：没有行号栏，不软换行，不显示搜索面板，也没有纵向滚动和末行之后的空白。输入或粘贴的换行会折叠到同一行，`Enter` 触发提交而不是换行。语法高亮、诊断和补全照常工作。
+
+```rust
+let url = cx.new(|cx| {
+    EditorState::new(window, cx)
+        .language("url")
+        .single_line(true)
+        .placeholder("Enter request URL")
+});
+```
+
+构造之后可以用 `set_single_line(single_line, window, cx)` 切换。将多行文档降为单行时，文本会折叠到一行，并像 `set_value` 一样清空撤销历史。
+
 ## 快捷键与矩形列选
 
 以下默认快捷键在编辑器聚焦时生效。macOS 的 Option 对应 Alt 修饰键；Linux 的这些操作不使用 Super/Win。

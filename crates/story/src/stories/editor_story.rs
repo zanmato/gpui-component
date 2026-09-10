@@ -14,6 +14,7 @@ const EXAMPLE_CODE: &str = include_str!("./editor_preview.rs");
 pub struct EditorStory {
     editor_state: Entity<EditorState>,
     decorations_state: Entity<EditorState>,
+    single_line_state: Entity<EditorState>,
     _decorations: TextDecorationCollection,
     active_tab: usize,
     readonly: bool,
@@ -78,6 +79,14 @@ impl EditorStory {
                 .default_value(decoration_text)
         });
 
+        let single_line_state = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language("json")
+                .single_line(true)
+                .placeholder("A one-line editor with highlighting")
+                .default_value(r#"{"name": "gpui-kit", "version": 1, "published": true}"#)
+        });
+
         let marker = "Decoration styles";
         let color_range = "Color";
         let italic_range = "Italic";
@@ -134,6 +143,7 @@ impl EditorStory {
         Self {
             editor_state,
             decorations_state,
+            single_line_state,
             _decorations: decorations,
             active_tab: 0,
             readonly: false,
@@ -206,7 +216,7 @@ impl Render for EditorStory {
                     .justify_between()
                     .child(
                         TabBar::new("editor-story-tabs")
-                            .w_64()
+                            .w_80()
                             .underline()
                             .selected_index(self.active_tab)
                             .on_click(cx.listener(|this, selected: &usize, _, cx| {
@@ -214,7 +224,8 @@ impl Render for EditorStory {
                                 cx.notify();
                             }))
                             .child("Code")
-                            .child("Decorations"),
+                            .child("Decorations")
+                            .child("Single line"),
                     )
                     .child(self.render_toolbar(cx)),
             )
@@ -227,7 +238,7 @@ impl Render for EditorStory {
                     .readonly(self.readonly)
                     .size_full()
                     .into_any_element()
-            } else {
+            } else if self.active_tab == 1 {
                 Editor::new(&self.decorations_state)
                     .when_some(self.font_family.clone(), |this, family| {
                         this.font_family(family)
@@ -235,6 +246,15 @@ impl Render for EditorStory {
                     .text_size(self.font_size)
                     .readonly(self.readonly)
                     .size_full()
+                    .into_any_element()
+            } else {
+                Editor::new(&self.single_line_state)
+                    .when_some(self.font_family.clone(), |this, family| {
+                        this.font_family(family)
+                    })
+                    .text_size(self.font_size)
+                    .readonly(self.readonly)
+                    .w_full()
                     .into_any_element()
             }))
     }
