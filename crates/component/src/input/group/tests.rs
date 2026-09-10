@@ -386,7 +386,9 @@ mod interaction {
             range, ime,
             "UTF-16 IME bounds must match the actual glyph bounds"
         );
-        state.update(&mut cx, |state, cx| state.set_selected_range(4..7, cx));
+        cx.update(|window, cx| {
+            state.update(cx, |state, cx| state.set_selected_range(4..7, window, cx))
+        });
         cx.simulate_input("文");
         draw(&mut cx);
         assert_eq!(state.read_with(&cx, |state, _| state.value()), "Ada 文文");
