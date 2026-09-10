@@ -413,10 +413,10 @@ mod tests {
             draw(&mut visual);
             let initial = content(&story, &mut visual);
             let end = initial.text().len();
-            visual.update(|_, cx| {
+            visual.update(|window, cx| {
                 story.update(cx, |story, cx| {
-                    dispatch!(&story.state, |input| input
-                        .update(cx, |input, cx| input.set_selected_range(end..end, cx)));
+                    dispatch!(&story.state, |input| input.update(cx, |input, cx| input
+                        .set_selected_range(end..end, window, cx)));
                 })
             });
             click("insert-command", &mut visual);
@@ -437,7 +437,7 @@ mod tests {
             visual.update(|window, cx| {
                 story.update(cx, |story, cx| {
                     dispatch!(&story.state, |input| input.update(cx, |input, cx| {
-                        input.set_selected_range(range.start + 1..range.end, cx);
+                        input.set_selected_range(range.start + 1..range.end, window, cx);
                         input.focus(window, cx);
                     }));
                 })
