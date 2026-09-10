@@ -249,7 +249,7 @@ impl CompletionExample {
         }
 
         self.input.update(cx, |input, cx| {
-            input.set_selected_range(menu.token_start..cursor, cx);
+            input.set_selected_range(menu.token_start..cursor, window, cx);
             input.replace(format!("${name} "), window, cx);
             input.focus(window, cx);
         });

@@ -101,6 +101,7 @@ pub struct EditorStory {
     editor_state: Entity<EditorState>,
     decorations_state: Entity<EditorState>,
     completions_state: Entity<EditorState>,
+    single_line_state: Entity<EditorState>,
     _decorations: TextDecorationCollection,
     _range_decorations: RangeDecorationCollection,
     _gutter_decorations: GutterDecorationCollection,
@@ -167,6 +168,14 @@ impl EditorStory {
             EditorState::new(window, cx)
                 .language("text")
                 .default_value(decoration_text)
+        });
+
+        let single_line_state = cx.new(|cx| {
+            EditorState::new(window, cx)
+                .language("json")
+                .single_line(true)
+                .placeholder("A one-line editor with highlighting")
+                .default_value(r#"{"name": "gpui-kit", "version": 1, "published": true}"#)
         });
 
         let marker = "Decoration styles";
@@ -292,6 +301,7 @@ impl EditorStory {
             editor_state,
             decorations_state,
             completions_state,
+            single_line_state,
             _decorations: decorations,
             _range_decorations: range_decorations,
             _gutter_decorations: gutter_decorations,
@@ -421,7 +431,7 @@ impl Render for EditorStory {
                     .justify_between()
                     .child(
                         TabBar::new("editor-story-tabs")
-                            .w(px(420.))
+                            .w(px(520.))
                             .underline()
                             .selected_index(self.active_tab)
                             .on_click(cx.listener(|this, selected: &usize, _, cx| {
@@ -430,7 +440,8 @@ impl Render for EditorStory {
                             }))
                             .child("Code")
                             .child("Decorations")
-                            .child("Completions"),
+                            .child("Completions")
+                            .child("Single line"),
                     )
                     .child(self.render_toolbar(cx)),
             )
@@ -440,7 +451,7 @@ impl Render for EditorStory {
                     1 => self
                         .styled_editor(&self.decorations_state)
                         .into_any_element(),
-                    _ => v_flex()
+                    2 => v_flex()
                         .size_full()
                         .gap_2()
                         .child(
@@ -453,6 +464,14 @@ impl Render for EditorStory {
                                 .flex_1()
                                 .min_h_0(),
                         )
+                        .into_any_element(),
+                    _ => Editor::new(&self.single_line_state)
+                        .when_some(self.font_family.clone(), |this, family| {
+                            this.font_family(family)
+                        })
+                        .text_size(self.font_size)
+                        .readonly(self.readonly)
+                        .w_full()
                         .into_any_element(),
                 }),
             )
