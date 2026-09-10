@@ -8225,9 +8225,9 @@ mod tests {
                 );
                 state.replace_text_in_range(None, "/", window, cx);
                 state.replace_text_in_range(None, "*", window, cx);
-                state.set_selected_range(4..4, cx);
+                state.set_selected_range(4..4, window, cx);
                 state.replace_text_in_range(None, "(", window, cx);
-                state.set_selected_range(2..2, cx);
+                state.set_selected_range(2..2, window, cx);
                 state.replace_text_in_range(None, "*", window, cx);
                 state.replace_text_in_range(None, "/", window, cx);
             });
@@ -8235,7 +8235,7 @@ mod tests {
         assert_cursors(&mut cx, &view.input, "/**/|()");
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| {
-                state.set_selected_range(2..2, cx);
+                state.set_selected_range(2..2, window, cx);
                 state.backspace(&Backspace, window, cx);
                 state.undo(&Undo, window, cx);
                 state.redo(&Redo, window, cx);
@@ -8357,7 +8357,7 @@ mod tests {
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| {
                 state.set_value("\n", window, cx);
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 state.replace_text_in_range(None, "(", window, cx);
             });
         });

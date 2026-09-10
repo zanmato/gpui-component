@@ -234,7 +234,7 @@ mod tests {
                 state.replace_text_in_range(None, "«", window, cx);
                 assert_eq!(state.text().to_string(), "«»");
                 state.set_value("if enabled:", window, cx);
-                state.set_selected_range(11..11, cx);
+                state.set_selected_range(11..11, window, cx);
                 state.set_highlighter("python", cx);
                 state.focus(window, cx);
             });
@@ -288,15 +288,15 @@ mod tests {
                     .default_value("\"hello world\"")
             });
             editor.update(cx, |state, cx| {
-                state.set_selected_range(6..6, cx);
+                state.set_selected_range(6..6, window, cx);
                 state.replace_text_in_range(None, "(", window, cx);
                 assert_eq!(state.text().to_string(), "\"hello( world\"");
                 state.set_value("# comment ", window, cx);
-                state.set_selected_range(10..10, cx);
+                state.set_selected_range(10..10, window, cx);
                 state.replace_text_in_range(None, "(", window, cx);
                 assert_eq!(state.text().to_string(), "# comment (");
                 state.set_value("# comment ", window, cx);
-                state.set_selected_range(10..10, cx);
+                state.set_selected_range(10..10, window, cx);
                 state.set_highlighter("rust", cx);
                 state.replace_text_in_range(None, "(", window, cx);
                 assert_eq!(state.text().to_string(), "# comment ()");
@@ -333,7 +333,7 @@ mod tests {
             VisualTestContext::update(cx, |window, cx| {
                 state.update(cx, |state, cx| {
                     state.set_highlighter("python", cx);
-                    state.set_selected_range(cursor..cursor, cx);
+                    state.set_selected_range(cursor..cursor, window, cx);
                     state.replace_text_in_range(None, typed, window, cx);
                     assert_eq!(state.text().to_string(), expected);
                 });
