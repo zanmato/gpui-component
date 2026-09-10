@@ -118,6 +118,21 @@ let editor = cx.new(|cx| {
 
 `scroll_bounce(true)` 让超出编辑器高度的代码在触控板或 Magic Mouse 的精细像素滚动到达顶部或底部时越过边缘并弹回，与 [Textarea](./textarea.md#滚动回弹) 相同。行号栏随代码移动，外框和滚动条保持不动；普通鼠标滚轮的按行滚动不触发回弹。
 
+### 单行模式
+
+URL 栏或表格内联单元格编辑器只需要语法着色，不需要完整的文档编辑区。`single_line(true)` 会将 Editor 按单行布局：没有行号栏，不软换行，不显示搜索面板，也没有纵向滚动和末行之后的空白。输入或粘贴的换行会折叠到同一行，`Enter` 触发提交而不是换行。语法高亮、诊断和补全照常工作。
+
+```rust
+let url = cx.new(|cx| {
+    EditorState::new(window, cx)
+        .language("url")
+        .single_line(true)
+        .placeholder("Enter request URL")
+});
+```
+
+构造之后可以用 `set_single_line(single_line, window, cx)` 切换。将多行文档降为单行时，文本会折叠到一行，并像 `set_value` 一样清空撤销历史。
+
 ## 主动补全
 
 `ShowCompletions` 可以在不修改文本的情况下请求补全，**没有默认快捷键**。应用应结合平台习惯选择绑定，避开 Ctrl+Space 等输入法快捷键。Editor 的绑定可以使用 `Input && mode == editor` 条件；现有 `Input` 绑定仍然有效。
