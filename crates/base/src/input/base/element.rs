@@ -3929,7 +3929,9 @@ impl<M: InputModeKind, R: EditorLineNumberRenderer> Element for TextElement<M, R
         );
 
         let state = self.state.read(cx);
-        let line_numbers = if state.mode.line_number() {
+        // One line has no gutter to number and no other line to set the
+        // active one apart from, so a single-line editor skips both.
+        let line_numbers = if state.mode.line_number() && state.is_multi_line() {
             let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
             let mut other_line_style = text_style.clone();
             other_line_style.color = state.editor_style.muted_foreground;
