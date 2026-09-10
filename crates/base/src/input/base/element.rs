@@ -1094,6 +1094,11 @@ impl<M: InputModeKind> TextElement<M> {
         style: &TextStyle,
         window: &mut Window,
     ) -> (Pixels, usize) {
+        // One line has no gutter: nothing to number, nothing to fold.
+        if state.is_single_line() {
+            return (px(0.), 0);
+        }
+
         let total_lines = text.lines_len();
         // Reserve three digits for small documents, then follow the actual
         // line count up to seven digits.
@@ -2802,7 +2807,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
 
         let total_wrapped_lines = state.display_map.wrap_row_count();
         let empty_bottom_height = empty_bottom_height(
-            state.is_code_editor(),
+            state.is_code_editor() && state.is_multi_line(),
             state.scroll_beyond_last_line,
             bounds.size.height,
             line_height,
