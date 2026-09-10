@@ -4687,7 +4687,7 @@ mod tests {
                             }),
                     );
                     state.focus(window, cx);
-                    state.set_selected_range(7..13, cx);
+                    state.set_selected_range(7..13, window, cx);
                 });
             })
             .unwrap();
@@ -4724,7 +4724,7 @@ mod tests {
                             cx,
                         )
                         .unwrap();
-                    state.set_selected_range(0..0, cx);
+                    state.set_selected_range(0..0, window, cx);
                 });
             })
             .unwrap();
@@ -4763,14 +4763,14 @@ mod tests {
                     assert_eq!(state.value().as_ref(), "问 @alice!");
                     state.redo(&Redo, window, cx);
                     assert_eq!(state.tokens()[0].token(), &token);
-                    state.set_selected_range(6..7, cx);
+                    state.set_selected_range(6..7, window, cx);
                     assert_eq!(state.selected_range(), 4..10);
                     state.replace("", window, cx);
                     assert_eq!(state.value().as_ref(), "问 !");
                     assert!(state.tokens().is_empty());
                     state.undo(&Undo, window, cx);
                     assert_eq!(state.tokens()[0].token(), &token);
-                    state.set_selected_range(0..0, cx);
+                    state.set_selected_range(0..0, window, cx);
                     state.replace("🙂", window, cx);
                     assert_eq!(state.tokens()[0].range(), 8..14);
                     state.undo(&Undo, window, cx);
@@ -4805,7 +4805,7 @@ mod tests {
                         .with_token(2..4, InlineToken::new("b", "@b"))
                         .unwrap();
                     state.set_value(content.clone(), window, cx);
-                    state.set_selected_range(2..2, cx);
+                    state.set_selected_range(2..2, window, cx);
                     assert_eq!(state.previous_boundary(2), 0);
                     assert_eq!(state.next_boundary(2), 4);
                     state.replace_and_mark_text_in_range(Some(1..2), "中", Some(1..1), window, cx);
@@ -4866,7 +4866,6 @@ mod tests {
             })
             .unwrap();
     }
-
 
     use crate::input::TabSize;
     use crate::theme::Theme;
@@ -9144,9 +9143,9 @@ mod tests {
                 );
                 state.replace_text_in_range(None, "/", window, cx);
                 state.replace_text_in_range(None, "*", window, cx);
-                state.set_selected_range(4..4, cx);
+                state.set_selected_range(4..4, window, cx);
                 state.replace_text_in_range(None, "(", window, cx);
-                state.set_selected_range(2..2, cx);
+                state.set_selected_range(2..2, window, cx);
                 state.replace_text_in_range(None, "*", window, cx);
                 state.replace_text_in_range(None, "/", window, cx);
             });
@@ -9154,7 +9153,7 @@ mod tests {
         assert_cursors(&mut cx, &view.input, "/**/|()");
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| {
-                state.set_selected_range(2..2, cx);
+                state.set_selected_range(2..2, window, cx);
                 state.backspace(&Backspace, window, cx);
                 state.undo(&Undo, window, cx);
                 state.redo(&Redo, window, cx);
@@ -9276,7 +9275,7 @@ mod tests {
         cx.update(|window, cx| {
             view.input.update(cx, |state, cx| {
                 state.set_value("\n", window, cx);
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 state.replace_text_in_range(None, "(", window, cx);
             });
         });

@@ -242,7 +242,7 @@ macro_rules! state_binding {
                 }
                 ("set_selected_range", [value]) => {
                     let range = range(&entity.read(cx).value(), value)?;
-                    entity.update(cx, |state, cx| state.set_selected_range(range, cx));
+                    entity.update(cx, |state, cx| state.set_selected_range(range, window, cx));
                     Ok(Data::Null)
                 }
                 ("replace", [text]) => {

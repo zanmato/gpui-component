@@ -3797,7 +3797,7 @@ mod tests {
                 )
             });
             editor.update(cx, |state, cx| {
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 state.replace_text_in_range(None, "\n", window, cx);
             });
             assert_eq!(first.get_ranges(cx), vec![5..8]);
