@@ -1,4 +1,4 @@
-use crate::input::{InputExtras as _, InputModeKind};
+use crate::input::InputModeKind;
 use std::ops::Range;
 
 use gpui::{Context, Window};
@@ -39,7 +39,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.selections.remove_all_but_active();
         self.set_selection(range.start, range.end);
         self.selected_word_range = Some(*self.active_selection());
-        self.extras.clear_selection_range();
         cx.notify()
     }
 
@@ -52,8 +51,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.selections.remove_all_but_active();
         self.set_selection(range.start, range.end);
         self.selected_word_range = None;
-        // Clear selection range highlight when user selects a line
-        self.extras.clear_selection_range();
         cx.notify()
     }
 }
