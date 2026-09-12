@@ -40,11 +40,11 @@ pub use gpui_base::input::{
     OverviewRulerDecorationCollection, OverviewRulerLane, Paste, Point, PrepaintCaretGeometry,
     RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Redo, Replace, Rope, RopeExt,
     RopeLines, Search, SelectAll, SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd,
-    SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection,
-    SelectionRangeProvider, ShowCharacterPalette, ShowCompletions, ShowDocumentHandler,
-    SignatureHelpProvider, SignatureHelpState, TabSize, TextDecoration, TextDecorationCollection,
-    TextareaState, ToggleCodeActions, ToggleSignatureHelp, Undo, WrappingIndent,
-    highlight_characters, highlight_contains, highlight_prefix,
+    SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection, ShowCharacterPalette,
+    ShowCompletions, ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState, TabSize,
+    TextDecoration, TextDecorationCollection, TextareaState, ToggleCodeActions,
+    ToggleSignatureHelp, Undo, WrappingIndent, highlight_characters, highlight_contains,
+    highlight_prefix,
 };
 pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
 pub use gutter_style::GutterStyle;

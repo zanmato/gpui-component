@@ -4008,10 +4008,7 @@ impl ShellRuntime {
                     payload.set("secondary", *secondary)?;
                     payload.set("shift", *shift)?;
                 }
-                InputEvent::Change
-                | InputEvent::Focus
-                | InputEvent::Blur
-                | InputEvent::SelectionRangeChange { .. } => {}
+                InputEvent::Change | InputEvent::Focus | InputEvent::Blur => {}
             }
             handler.call::<_, ()>((
                 payload,
