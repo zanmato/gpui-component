@@ -127,7 +127,6 @@ pub enum InputEvent {
     PressEnter { secondary: bool, shift: bool },
     Focus,
     Blur,
-    SelectionRangeChange { range: lsp_types::Range },
 }
 
 pub(super) const CONTEXT: &str = "Input";
@@ -2322,12 +2321,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         if event.modifiers.shift {
             self.select_to_with_affinity(offset, line_end_affinity, cx);
         } else {
-            // A plain click is not a drag yet. Clear `selecting` so the move can
-            // request the selection ranges, then arm it again for a drag that
-            // may follow.
-            self.selecting = false;
-            self.move_to_with_affinity(offset, None, line_end_affinity, window, cx);
-            self.selecting = true;
+            self.move_to_with_affinity(offset, None, line_end_affinity, window, cx)
         }
     }
 
@@ -3058,7 +3052,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         cx: &mut Context<Self>,
     ) {
         M::clear_inline_completion(self, cx);
-        self.extras.clear_selection_range();
 
         self.cursor_line_end_affinity = line_end_affinity;
         let offset = self.cursor_boundary(offset, Bias::Left);
@@ -3963,8 +3956,6 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         if !self.silent_replace_text {
             M::on_text_typed(self, &range, &new_text, window, cx);
         }
-        let cursor = self.cursor();
-        M::on_selection_ranges(self, cursor, window, cx);
 
         if self.emit_events {
             cx.emit(InputEvent::Change);
@@ -4761,257 +4752,6 @@ mod tests {
         multi
             .input
             .update(cx, |state, _| assert!(state.shows_scrollbar()));
-    }
-
-    #[gpui::test]
-    fn test_selection_range_byte_calculation(_cx: &mut TestAppContext) {
-        use crate::input::RopeExt;
-
-        // Create a simple rope to test byte range calculations
-        let text = Rope::from("SELECT *\nFROM table\nWHERE id = 1");
-
-        eprintln!("Text: {:?}", text.to_string());
-        eprintln!("Text len: {}", text.len());
-        eprintln!("Lines len: {}", text.lines_len());
-
-        for i in 0..text.lines_len() {
-            let start = text.line_start_offset(i);
-            let end = text.line_end_offset(i);
-            let next_line_start = if i + 1 < text.lines_len() {
-                text.line_start_offset(i + 1)
-            } else {
-                text.len()
-            };
-            eprintln!(
-                "Line {}: start={}, end={}, next_start={}, text={:?}",
-                i,
-                start,
-                end,
-                next_line_start,
-                text.slice(start..end).to_string()
-            );
-        }
-
-        // Simulate cursor on line 1 (FROM table)
-        let cursor_offset = text.line_start_offset(1) + 1; // After "F"
-        let current_row = text.offset_to_point(cursor_offset).row;
-
-        eprintln!("\nCursor offset: {}", cursor_offset);
-        eprintln!("Current row: {}", current_row);
-
-        // Calculate current line byte range (as done in element.rs)
-        let current_line_start = text.line_start_offset(current_row);
-        let current_line_end = if current_row + 1 < text.lines_len() {
-            text.line_start_offset(current_row + 1)
-        } else {
-            text.len()
-        };
-
-        eprintln!(
-            "Current line byte range: {}..{}",
-            current_line_start, current_line_end
-        );
-        eprintln!(
-            "Current line text: {:?}",
-            text.slice(current_line_start..current_line_end).to_string()
-        );
-
-        // Simulate selection range spanning all lines
-        let selection_start = text.line_start_offset(0);
-        let selection_end = text.len();
-        let selection_range = selection_start..selection_end;
-
-        eprintln!("\nSelection range: {}..{}", selection_start, selection_end);
-
-        // Check if selection range overlaps with current line
-        let overlaps =
-            selection_range.start < current_line_end && selection_range.end > current_line_start;
-        eprintln!("Selection overlaps with current line: {}", overlaps);
-
-        if overlaps {
-            // Before part
-            if selection_range.start < current_line_start {
-                let before = selection_range.start..current_line_start;
-                eprintln!(
-                    "Before part: {}..{} = {:?}",
-                    before.start,
-                    before.end,
-                    text.slice(before.clone()).to_string()
-                );
-            }
-            // After part
-            if selection_range.end > current_line_end {
-                let after = current_line_end..selection_range.end;
-                eprintln!(
-                    "After part: {}..{} = {:?}",
-                    after.start,
-                    after.end,
-                    text.slice(after.clone()).to_string()
-                );
-            }
-        }
-
-        // Test when cursor is on the last line
-        eprintln!("\n--- Cursor on last line ---");
-        let cursor_offset_last = text.line_start_offset(2) + 1; // After "W"
-        let current_row_last = text.offset_to_point(cursor_offset_last).row;
-        eprintln!("Cursor offset: {}", cursor_offset_last);
-        eprintln!("Current row: {}", current_row_last);
-
-        let current_line_start_last = text.line_start_offset(current_row_last);
-        let current_line_end_last = if current_row_last + 1 < text.lines_len() {
-            text.line_start_offset(current_row_last + 1)
-        } else {
-            text.len()
-        };
-
-        eprintln!(
-            "Current line byte range: {}..{}",
-            current_line_start_last, current_line_end_last
-        );
-        eprintln!(
-            "Current line text: {:?}",
-            text.slice(current_line_start_last..current_line_end_last)
-                .to_string()
-        );
-
-        // Check overlap for last line
-        let overlaps_last = selection_range.start < current_line_end_last
-            && selection_range.end > current_line_start_last;
-        eprintln!("Selection overlaps with current line: {}", overlaps_last);
-
-        if overlaps_last {
-            // Before part only (no after part for last line)
-            if selection_range.start < current_line_start_last {
-                let before = selection_range.start..current_line_start_last;
-                eprintln!(
-                    "Before part: {}..{} = {:?}",
-                    before.start,
-                    before.end,
-                    text.slice(before.clone()).to_string()
-                );
-            }
-            if selection_range.end > current_line_end_last {
-                let after = current_line_end_last..selection_range.end;
-                eprintln!(
-                    "After part: {}..{} = {:?}",
-                    after.start,
-                    after.end,
-                    text.slice(after.clone()).to_string()
-                );
-            }
-        }
-    }
-
-    /// Double- and triple-click selection must drop the LSP selection range
-    /// highlight.
-    #[gpui::test]
-    fn test_mouse_word_and_line_selection_clear_selection_range(cx: &mut TestAppContext) {
-        let view = InputView::<EditorMode>::new(cx);
-        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
-        let input = view.input;
-
-        let range = lsp_types::Range {
-            start: lsp_types::Position {
-                line: 0,
-                character: 0,
-            },
-            end: lsp_types::Position {
-                line: 2,
-                character: 0,
-            },
-        };
-
-        for (name, select) in [
-            (
-                "select_word",
-                (|s: &mut InputBaseState<EditorMode>,
-                  window: &mut Window,
-                  cx: &mut Context<InputBaseState<EditorMode>>| {
-                    s.select_word(4, window, cx)
-                })
-                    as fn(
-                        &mut InputBaseState<EditorMode>,
-                        &mut Window,
-                        &mut Context<InputBaseState<EditorMode>>,
-                    ),
-            ),
-            ("select_line", |s, window, cx| s.select_line(4, window, cx)),
-        ] {
-            cx.update(|window, cx| {
-                input.update(cx, |state, cx| {
-                    state.set_value("aaa\nbbb\nccc", window, cx);
-                    state.extras.lsp.set_selection_range(range);
-                    assert!(
-                        state.extras.lsp.has_selection_range(),
-                        "{name}: precondition"
-                    );
-                    select(state, window, cx);
-                });
-            });
-
-            input.read_with(&cx, |state, _| {
-                assert!(
-                    !state.extras.lsp.has_selection_range(),
-                    "{name} must clear the LSP selection range highlight"
-                );
-            });
-        }
-    }
-
-    #[gpui::test]
-    fn test_selection_range_with_rendering(cx: &mut TestAppContext) {
-        let input_view = InputView::new(cx);
-        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
-        let input = input_view.input;
-
-        // Set up multi-line SQL text
-        let text = "SELECT *\nFROM table\nWHERE id = 1";
-
-        cx.update(|window, cx| {
-            input.update(cx, |state, cx| {
-                state.set_value(text, window, cx);
-            });
-        });
-
-        // Set up a selection range that spans all lines
-        cx.update(|_, cx| {
-            input.update(cx, |state, _cx| {
-                state.extras.lsp.set_selection_range(lsp_types::Range {
-                    start: lsp_types::Position {
-                        line: 0,
-                        character: 0,
-                    },
-                    end: lsp_types::Position {
-                        line: 2,
-                        character: 12,
-                    },
-                });
-            });
-        });
-
-        // Move cursor to line 1 (FROM table)
-        cx.update(|window, cx| {
-            input.update(cx, |state, cx| {
-                state.set_cursor_position(Position::new(1, 1), window, cx);
-            });
-        });
-
-        // Run background tasks
-        cx.run_until_parked();
-
-        // Check the state
-        cx.update(|_, cx| {
-            input.read_with(cx, |state, _| {
-                eprintln!("\n=== Final State ===");
-                eprintln!("Text: {:?}", state.text.to_string());
-                eprintln!("Cursor: {}", state.cursor());
-                eprintln!(
-                    "Selection range set: {}",
-                    state.extras.lsp.has_selection_range()
-                );
-            });
-        });
     }
 
     #[gpui::test]

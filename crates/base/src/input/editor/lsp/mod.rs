@@ -11,7 +11,6 @@ mod definitions;
 mod document_colors;
 mod hover;
 mod overlay;
-mod selection_ranges;
 mod semantic_tokens;
 mod signature_help;
 
@@ -21,7 +20,6 @@ pub use definitions::*;
 pub use document_colors::*;
 pub use hover::*;
 pub use overlay::*;
-pub use selection_ranges::*;
 pub use semantic_tokens::*;
 pub use signature_help::*;
 
@@ -92,8 +90,6 @@ pub struct Lsp {
     pub document_color_provider: Option<Rc<dyn DocumentColorProvider>>,
     /// The range semantic tokens provider.
     pub semantic_tokens_provider: Option<Rc<dyn DocumentRangeSemanticTokensProvider>>,
-    /// The selection range provider.
-    pub selection_range_provider: Option<Rc<dyn SelectionRangeProvider>>,
     /// Optional host hook to show documents for Go to Definition locations,
     /// following the `window/showDocument` request (see [`ShowDocumentHandler`]).
     ///
@@ -108,11 +104,9 @@ pub struct Lsp {
     /// names. Color is resolved from the name at paint time so theme switches
     /// take effect without a refetch.
     pub(crate) semantic_tokens: Vec<(lsp_types::Range, SharedString)>,
-    pub(crate) selection_range: Option<(lsp_types::Range, ())>,
     pub(crate) _hover_task: Task<Result<()>>,
     pub(crate) _document_color_task: Task<()>,
     pub(crate) _semantic_tokens_task: Task<()>,
-    pub(crate) _selection_range_task: Task<Result<()>>,
     pub(crate) _signature_help_task: Task<()>,
 }
 
@@ -127,38 +121,18 @@ impl Default for Lsp {
             document_color_provider: None,
             completion_menu: CompletionMenuOptions::default(),
             semantic_tokens_provider: None,
-            selection_range_provider: None,
             show_document: None,
             document_colors: vec![],
             semantic_tokens: vec![],
-            selection_range: None,
             _hover_task: Task::ready(Ok(())),
             _document_color_task: Task::ready(()),
             _semantic_tokens_task: Task::ready(()),
-            _selection_range_task: Task::ready(Ok(())),
             _signature_help_task: Task::ready(()),
         }
     }
 }
 
 impl Lsp {
-    /// Clear the selection range highlight.
-    pub(crate) fn clear_selection_range(&mut self) {
-        self.selection_range = None;
-    }
-
-    /// Set the selection range (for testing purposes).
-    #[cfg(test)]
-    pub fn set_selection_range(&mut self, range: lsp_types::Range) {
-        self.selection_range = Some((range, ()));
-    }
-
-    /// Check if selection range is set (for debugging).
-    #[cfg(test)]
-    pub fn has_selection_range(&self) -> bool {
-        self.selection_range.is_some()
-    }
-
     /// Update the LSP when the text changes.
     ///
     /// `version` is the document version the given `text` belongs to; a
@@ -179,11 +153,9 @@ impl Lsp {
     pub(crate) fn reset(&mut self) {
         self.document_colors.clear();
         self.semantic_tokens.clear();
-        self.selection_range = None;
         self._hover_task = Task::ready(Ok(()));
         self._document_color_task = Task::ready(());
         self._semantic_tokens_task = Task::ready(());
-        self._selection_range_task = Task::ready(Ok(()));
         self._signature_help_task = Task::ready(());
     }
 }

@@ -155,7 +155,6 @@ impl NumberInputStory {
             }
             InputEvent::Focus => println!("Focus"),
             InputEvent::Blur => println!("Blur"),
-            _ => {}
         }
     }
 

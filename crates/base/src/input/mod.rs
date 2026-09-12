@@ -94,7 +94,7 @@ pub use lsp::{
     CodeActionItem, CodeActionMenuState, CodeActionProvider, CompletionMenuOptions,
     CompletionMenuState, CompletionProvider, DefinitionProvider, DocumentColorProvider,
     DocumentRangeSemanticTokensProvider, HoverPopoverState, HoverProvider, InputOverlayKind, Lsp,
-    SelectionRangeProvider, ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState,
+    ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState,
 };
 pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;

@@ -94,7 +94,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.update_preferred_column();
         M::hide_context_menu(self, cx);
         M::clear_inline_completion(self, cx);
-        M::on_selection_ranges(self, offset, window, cx);
         M::on_cursor_moved(self, offset, window, cx);
         cx.notify()
     }
@@ -212,7 +211,6 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.pause_blink_cursor(cx);
         M::hide_context_menu(self, cx);
         M::clear_inline_completion(self, cx);
-        M::on_selection_ranges(self, cursor, window, cx);
         M::on_cursor_moved(self, cursor, window, cx);
         cx.notify();
     }
