@@ -670,6 +670,14 @@ impl<M: InputModeKind> TextElement<M> {
         range: &Range<usize>,
         last_layout: &LastLayout,
     ) -> Option<Vec<Corners<Point<Pixels>>>> {
+        let rows = Self::layout_range_rows(range, last_layout)?;
+        Some(rows.into_iter().map(|row| row.corners).collect())
+    }
+
+    /// Like [`Self::layout_range_corners`], but also records how much of each
+    /// visual row the range covers so a block frame can tell a ragged line
+    /// ending from text that sits outside the range on the same row.
+    fn layout_range_rows(range: &Range<usize>, last_layout: &LastLayout) -> Option<Vec<RangeRow>> {
         let range = range.start.max(last_layout.visible_range_offset.start)
             ..range.end.min(last_layout.visible_range_offset.end);
         if range.is_empty() {
@@ -677,7 +685,7 @@ impl<M: InputModeKind> TextElement<M> {
         }
 
         let mut y = last_layout.visible_top;
-        let mut corners = Vec::new();
+        let mut rows = Vec::new();
         for (&line_offset, line) in last_layout
             .visible_line_byte_offsets
             .iter()
@@ -703,18 +711,26 @@ impl<M: InputModeKind> TextElement<M> {
                         } else {
                             shaped.x_for_index(end_ix - offset)
                         };
-                    corners.push(Corners {
-                        top_left: point(left, y),
-                        top_right: point(right, y),
-                        bottom_left: point(left, y + last_layout.line_height),
-                        bottom_right: point(right, y + last_layout.line_height),
+                    // Whitespace after the last glyph is invisible, so a range
+                    // that stops just short of it still reads as reaching the
+                    // end of the row.
+                    let visible_end = offset + shaped.text.trim_end().len();
+                    rows.push(RangeRow {
+                        corners: Corners {
+                            top_left: point(left, y),
+                            top_right: point(right, y),
+                            bottom_left: point(left, y + last_layout.line_height),
+                            bottom_right: point(right, y + last_layout.line_height),
+                        },
+                        starts_row: start_ix <= offset,
+                        reaches_row_end: newline || end_ix >= visible_end,
                     });
                 }
                 offset = end;
                 y += last_layout.line_height;
             }
         }
-        (!corners.is_empty()).then_some(corners)
+        (!rows.is_empty()).then_some(rows)
     }
 
     fn layout_range_decorations(
@@ -753,11 +769,16 @@ impl<M: InputModeKind> TextElement<M> {
                         fills.push((path, color));
                     }
                 }
-                RangeDecorationStyle::Frame => {
+                style @ (RangeDecorationStyle::Frame | RangeDecorationStyle::Block) => {
                     let color = decoration.color().unwrap_or(state.editor_style.foreground);
-                    let Some(corners) = Self::layout_range_corners(decoration.range(), last_layout)
+                    let Some(rows) = Self::layout_range_rows(decoration.range(), last_layout)
                     else {
                         continue;
+                    };
+                    let corners = if style == RangeDecorationStyle::Block {
+                        block_corners(rows)
+                    } else {
+                        rows.into_iter().map(|row| row.corners).collect()
                     };
                     let points = frame_outline_points(&corners);
                     let Some(first) = points.first().copied() else {
@@ -765,9 +786,9 @@ impl<M: InputModeKind> TextElement<M> {
                     };
                     let origin = bounds.origin + point(last_layout.line_number_width, px(0.));
                     let mut builder = gpui::PathBuilder::stroke(px(1.));
-                    builder.move_to(origin + first);
+                    builder.move_to(snap_stroke(origin + first));
                     for point in points.iter().skip(1) {
-                        builder.line_to(origin + *point);
+                        builder.line_to(snap_stroke(origin + *point));
                     }
                     builder.close();
                     if let Ok(path) = builder.build() {
@@ -1694,6 +1715,51 @@ fn print_points_as_svg_path(
             println!("L{},{}", p.x.as_f32() as i32, p.y.as_f32() as i32);
         }
     }
+}
+
+/// Center a one-pixel stroke on a pixel. Text layout yields fractional
+/// coordinates, and a hairline centered on a pixel boundary is rasterized as
+/// two half-covered pixels, which reads as a blurred line.
+fn snap_stroke(point: Point<Pixels>) -> Point<Pixels> {
+    gpui::point(point.x.round() + px(0.5), point.y.round() + px(0.5))
+}
+
+/// One visual row of a projected range, with how much of the row it covers.
+struct RangeRow {
+    corners: Corners<Point<Pixels>>,
+    /// The range starts at or before the row's first glyph.
+    starts_row: bool,
+    /// The range reaches the row's last visible glyph (or its newline).
+    reaches_row_end: bool,
+}
+
+/// Square off ragged rows into the block the range spans. A row keeps its own
+/// edge on a side the range only partly covers, so text sharing that row but
+/// sitting outside the range stays outside the frame.
+fn block_corners(rows: Vec<RangeRow>) -> Vec<Corners<Point<Pixels>>> {
+    let left = rows
+        .iter()
+        .filter(|row| row.starts_row)
+        .map(|row| row.corners.top_left.x)
+        .reduce(Pixels::min);
+    let right = rows
+        .iter()
+        .map(|row| row.corners.top_right.x)
+        .reduce(Pixels::max);
+    rows.into_iter()
+        .map(|row| {
+            let mut corners = row.corners;
+            if let Some(left) = left.filter(|_| row.starts_row) {
+                corners.top_left.x = left;
+                corners.bottom_left.x = left;
+            }
+            if let Some(right) = right.filter(|_| row.reaches_row_end) {
+                corners.top_right.x = right;
+                corners.bottom_right.x = right;
+            }
+            corners
+        })
+        .collect()
 }
 
 fn frame_outline_points(corners: &[Corners<Point<Pixels>>]) -> Vec<Point<Pixels>> {
@@ -3084,6 +3150,85 @@ mod tests {
                 point(px(2.), px(0.)),
             ]
         );
+    }
+
+    #[test]
+    fn stroke_points_are_centered_on_pixels() {
+        assert_eq!(
+            snap_stroke(point(px(10.3), px(20.7))),
+            point(px(10.5), px(21.5))
+        );
+        assert_eq!(snap_stroke(point(px(4.), px(0.))), point(px(4.5), px(0.5)));
+    }
+
+    #[test]
+    fn block_corners_square_off_ragged_rows_but_keep_partial_edges() {
+        let row =
+            |left: f32, right: f32, y: f32, starts_row: bool, reaches_row_end: bool| RangeRow {
+                corners: Corners {
+                    top_left: point(px(left), px(y)),
+                    top_right: point(px(right), px(y)),
+                    bottom_left: point(px(left), px(y + 10.)),
+                    bottom_right: point(px(right), px(y + 10.)),
+                },
+                starts_row,
+                reaches_row_end,
+            };
+        // "SELECT" / "* FROM some_table" / "WHERE 1; SELECT ..." where the
+        // range starts mid-row on the first line and ends mid-row on the last.
+        let corners = block_corners(vec![
+            row(30., 50., 0., false, true),
+            row(0., 90., 10., true, true),
+            row(0., 40., 20., true, false),
+        ]);
+        let edges = corners
+            .iter()
+            .map(|corners| (corners.top_left.x, corners.top_right.x))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            edges,
+            vec![(px(30.), px(90.)), (px(0.), px(90.)), (px(0.), px(40.)),]
+        );
+        assert_eq!(corners[1].bottom_right.x, px(90.));
+    }
+
+    #[gpui::test]
+    fn block_frame_ignores_trailing_whitespace_and_keeps_following_text_outside(
+        cx: &mut TestAppContext,
+    ) {
+        let text = "SELECT\n* FROM some_table   \nWHERE 1; SELECT 2";
+        let (editor, window) = decoration_editor(cx, text, false);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            let state = editor.read(cx);
+            let layout = state.last_layout.as_ref().unwrap();
+            let statement = 0..text.find("; SELECT").unwrap() + 1;
+            let rows = TextElement::<EditorMode>::layout_range_rows(&statement, layout).unwrap();
+            assert_eq!(rows.len(), 3);
+            assert!(rows.iter().all(|row| row.starts_row));
+            // The second row ends in spaces the range does not cover; the last
+            // row has another statement after the range.
+            assert_eq!(
+                rows.iter()
+                    .map(|row| row.reaches_row_end)
+                    .collect::<Vec<_>>(),
+                vec![true, true, false]
+            );
+            let widest = rows[1].corners.top_right.x;
+            assert!(widest > rows[0].corners.top_right.x);
+            assert!(widest > rows[2].corners.top_right.x);
+            let corners = block_corners(rows);
+            assert_eq!(corners[0].top_right.x, widest);
+            assert_eq!(corners[1].top_right.x, widest);
+            assert!(corners[2].top_right.x < widest);
+
+            let second = text.find("SELECT 2").unwrap()..text.len();
+            let rows = TextElement::<EditorMode>::layout_range_rows(&second, layout).unwrap();
+            assert_eq!(rows.len(), 1);
+            assert!(!rows[0].starts_row);
+            assert!(rows[0].reaches_row_end);
+        });
     }
 
     #[test]

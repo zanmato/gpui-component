@@ -231,6 +231,8 @@ let review_ranges = editor.update(cx, |state, cx| {
         vec![
             RangeDecoration::new(0..8).with_style(RangeDecorationStyle::Fill),
             RangeDecoration::new(12..24), // Frame is the default.
+            // Block squares off ragged line endings into one rectangle.
+            RangeDecoration::new(30..64).with_style(RangeDecorationStyle::Block),
         ],
         cx,
     )
