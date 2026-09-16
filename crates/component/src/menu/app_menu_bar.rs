@@ -91,6 +91,20 @@ impl AppMenuBar {
         self.set_selected_index(None, window, cx);
     }
 
+    /// Whether `focused` is the pre-menu element or sits inside one of the
+    /// open popup menus.
+    fn contains_focused(&self, focused: &FocusHandle, window: &Window, cx: &App) -> bool {
+        if self.action_context.as_ref() == Some(focused) {
+            return true;
+        }
+        self.menus.iter().any(|menu| {
+            menu.read(cx)
+                .popup_menu
+                .as_ref()
+                .is_some_and(|popup| popup.read(cx).focus_handle(cx).contains_focused(window, cx))
+        })
+    }
+
     fn set_selected_index(
         &mut self,
         ix: Option<usize>,
@@ -100,8 +114,13 @@ impl AppMenuBar {
         if self.selected_index.is_none() && ix.is_some() {
             self.action_context = window.focused(cx);
         } else if ix.is_none() {
-            if let Some(action_context) = self.action_context.as_ref() {
-                action_context.focus(window, cx);
+            let focus_moved_away = window
+                .focused(cx)
+                .is_some_and(|focused| !self.contains_focused(&focused, window, cx));
+            if !focus_moved_away {
+                if let Some(action_context) = self.action_context.as_ref() {
+                    action_context.focus(window, cx);
+                }
             }
             self.action_context = None;
         }
@@ -353,13 +372,49 @@ mod tests {
             menu_bar.set_selected_index(Some(1), window, cx);
             assert_eq!(menu_bar.action_context.as_ref(), Some(&first_focus));
 
+            // Focus moved outside the menus while they were open (an item
+            // handler did it), so closing must not pull it back.
+            menu_bar.set_selected_index(None, window, cx);
+            assert!(menu_bar.action_context.is_none());
+            assert_eq!(window.focused(cx).as_ref(), Some(&second_focus));
+
+            menu_bar.set_selected_index(Some(0), window, cx);
+            assert_eq!(menu_bar.action_context.as_ref(), Some(&second_focus));
+        });
+    }
+
+    #[gpui::test]
+    fn restores_action_context_when_focus_was_not_moved(cx: &mut TestAppContext) {
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let first_focus = cx.focus_handle();
+            let second_focus = cx.focus_handle();
+            first_focus.focus(window, cx);
+
+            TestRoot {
+                menu_bar: cx.new(|_| AppMenuBar {
+                    menus: Vec::new(),
+                    selected_index: None,
+                    action_context: None,
+                }),
+                first_focus,
+                second_focus,
+            }
+        });
+
+        let (menu_bar, first_focus) = root.read_with(cx, |root, _| {
+            (root.menu_bar.clone(), root.first_focus.clone())
+        });
+
+        menu_bar.update_in(cx, |menu_bar, window, cx| {
+            menu_bar.set_selected_index(Some(0), window, cx);
+            assert_eq!(menu_bar.action_context.as_ref(), Some(&first_focus));
+
+            window.blur(cx);
+            assert!(window.focused(cx).is_none());
+
             menu_bar.set_selected_index(None, window, cx);
             assert!(menu_bar.action_context.is_none());
             assert_eq!(window.focused(cx).as_ref(), Some(&first_focus));
-
-            second_focus.focus(window, cx);
-            menu_bar.set_selected_index(Some(0), window, cx);
-            assert_eq!(menu_bar.action_context.as_ref(), Some(&second_focus));
         });
     }
 }
