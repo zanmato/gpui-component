@@ -27,6 +27,11 @@ pub struct AppMenuBar {
     menus: Vec<Entity<AppMenu>>,
     selected_index: Option<usize>,
     action_context: Option<FocusHandle>,
+    /// Focus handles of the popup menus shown since the bar was last closed.
+    /// They are kept here instead of being read off each `AppMenu`, because
+    /// the bar is closed from inside an `AppMenu` update (`toggle`,
+    /// `handle_dismiss`) and reading that menu then would panic.
+    popup_focus_handles: Vec<FocusHandle>,
 }
 
 impl AppMenuBar {
@@ -36,6 +41,7 @@ impl AppMenuBar {
             let mut this = Self {
                 selected_index: None,
                 action_context: None,
+                popup_focus_handles: Vec::new(),
                 menus: Vec::new(),
             };
             this.reload(cx);
@@ -58,6 +64,7 @@ impl AppMenuBar {
             .collect();
         self.selected_index = None;
         self.action_context = None;
+        self.popup_focus_handles.clear();
         cx.notify();
     }
 
@@ -91,18 +98,20 @@ impl AppMenuBar {
         self.set_selected_index(None, window, cx);
     }
 
+    fn track_popup_focus(&mut self, focus_handle: FocusHandle) {
+        if !self.popup_focus_handles.contains(&focus_handle) {
+            self.popup_focus_handles.push(focus_handle);
+        }
+    }
+
     /// Whether `focused` is the pre-menu element or sits inside one of the
     /// open popup menus.
     fn contains_focused(&self, focused: &FocusHandle, window: &Window, cx: &App) -> bool {
-        if self.action_context.as_ref() == Some(focused) {
-            return true;
-        }
-        self.menus.iter().any(|menu| {
-            menu.read(cx)
-                .popup_menu
-                .as_ref()
-                .is_some_and(|popup| popup.read(cx).focus_handle(cx).contains_focused(window, cx))
-        })
+        self.action_context.as_ref() == Some(focused)
+            || self
+                .popup_focus_handles
+                .iter()
+                .any(|popup_focus| popup_focus.contains_focused(window, cx))
     }
 
     fn set_selected_index(
@@ -123,6 +132,7 @@ impl AppMenuBar {
                 }
             }
             self.action_context = None;
+            self.popup_focus_handles.clear();
         }
 
         self.selected_index = ix;
@@ -215,6 +225,9 @@ impl AppMenu {
         };
 
         let focus_handle = popup_menu.read(cx).focus_handle(cx);
+        self.menu_bar.update(cx, |menu_bar, _| {
+            menu_bar.track_popup_focus(focus_handle.clone());
+        });
         if !focus_handle.contains_focused(window, cx) {
             focus_handle.focus(window, cx);
         }
@@ -350,6 +363,7 @@ mod tests {
                     menus: Vec::new(),
                     selected_index: None,
                     action_context: None,
+                    popup_focus_handles: Vec::new(),
                 }),
                 first_focus,
                 second_focus,
@@ -395,6 +409,7 @@ mod tests {
                     menus: Vec::new(),
                     selected_index: None,
                     action_context: None,
+                    popup_focus_handles: Vec::new(),
                 }),
                 first_focus,
                 second_focus,
@@ -415,6 +430,76 @@ mod tests {
             menu_bar.set_selected_index(None, window, cx);
             assert!(menu_bar.action_context.is_none());
             assert_eq!(window.focused(cx).as_ref(), Some(&first_focus));
+        });
+    }
+
+    /// A menu closes the bar from inside its own update, so the bar must not
+    /// read that menu while deciding whether focus moved away.
+    #[gpui::test]
+    fn closes_from_inside_a_menu_update(cx: &mut TestAppContext) {
+        cx.update(|cx| crate::init(cx));
+
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let first_focus = cx.focus_handle();
+            let second_focus = cx.focus_handle();
+            first_focus.focus(window, cx);
+
+            let menu_bar = cx.new(|_| AppMenuBar {
+                menus: Vec::new(),
+                selected_index: None,
+                action_context: None,
+                popup_focus_handles: Vec::new(),
+            });
+            let owned_menu = OwnedMenu {
+                name: "File".into(),
+                items: Vec::new(),
+                disabled: false,
+            };
+            let menu = AppMenu::new(0, &owned_menu, menu_bar.clone(), cx);
+            menu_bar.update(cx, |menu_bar, _| menu_bar.menus.push(menu));
+
+            TestRoot {
+                menu_bar,
+                first_focus,
+                second_focus,
+            }
+        });
+
+        let (menu_bar, first_focus, second_focus) = root.read_with(cx, |root, _| {
+            (
+                root.menu_bar.clone(),
+                root.first_focus.clone(),
+                root.second_focus.clone(),
+            )
+        });
+        let menu = menu_bar.read_with(cx, |menu_bar, _| menu_bar.menus[0].clone());
+
+        // Open, let the popup render and take focus, then close again: focus
+        // never left the menus, so it goes back to where it was.
+        menu.update_in(cx, |menu, window, cx| menu.toggle(window, cx));
+        cx.run_until_parked();
+        menu.update_in(cx, |menu, window, cx| {
+            let popup_focus = menu
+                .popup_menu
+                .as_ref()
+                .map(|popup| popup.read(cx).focus_handle(cx));
+            assert!(popup_focus.is_some_and(|focus| focus.is_focused(window)));
+            menu.toggle(window, cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&first_focus));
+        });
+
+        // An item handler moved focus elsewhere before the popup dismissed.
+        menu.update_in(cx, |menu, window, cx| menu.toggle(window, cx));
+        cx.run_until_parked();
+        menu.update_in(cx, |menu, window, cx| {
+            second_focus.focus(window, cx);
+            let popup_menu = menu.popup_menu.clone().expect("popup was built");
+            menu.handle_dismiss(&popup_menu, &DismissEvent, window, cx);
+            assert_eq!(window.focused(cx).as_ref(), Some(&second_focus));
+        });
+        menu_bar.read_with(cx, |menu_bar, _| {
+            assert_eq!(menu_bar.selected_index, None);
+            assert!(menu_bar.popup_focus_handles.is_empty());
         });
     }
 }
