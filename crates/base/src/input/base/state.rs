@@ -6434,7 +6434,6 @@ mod tests {
             .unwrap();
     }
 
-    use crate::input::TabSize;
     use crate::theme::Theme;
     use gpui::{TestAppContext, VisualTestContext, size};
 
