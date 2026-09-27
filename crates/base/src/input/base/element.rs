@@ -13,11 +13,16 @@ use gpui::{
 };
 use ropey::Rope;
 use smallvec::SmallVec;
-use std::{ops::Range, rc::Rc};
+use std::{cmp::Ordering, ops::Range, rc::Rc};
 
 use crate::{
     Scrollbar,
-    input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
+    input::{
+        RopeExt as _,
+        blink_cursor::CURSOR_WIDTH,
+        decorations::{BlockEdge, BlockLayout, BlockMemory},
+        display_map::LineLayout,
+    },
 };
 
 use super::{
@@ -804,6 +809,10 @@ impl<M: InputModeKind> TextElement<M> {
                         },
                         starts_row: start_ix <= offset,
                         reaches_row_end: newline || end_ix >= visible_end,
+                        // Everything that places the row's edges, plus the
+                        // character after the range, which can rewrap the row
+                        // or widen its newline cell.
+                        source: line_offset..end_ix + 1,
                     });
                 }
                 offset = end;
@@ -858,7 +867,18 @@ impl<M: InputModeKind> TextElement<M> {
                         continue;
                     };
                     let corners = if style == RangeDecorationStyle::Block {
-                        block_corners(rows)
+                        let (left, right) = remember_block_edges(
+                            &rows,
+                            &mut decoration.block_memory().borrow_mut(),
+                            block_layout(last_layout),
+                            |line_offset| {
+                                last_layout
+                                    .visible_line_byte_offsets
+                                    .binary_search(&line_offset)
+                                    .is_ok()
+                            },
+                        );
+                        block_corners(rows, left, right)
                     } else {
                         rows.into_iter().map(|row| row.corners).collect()
                     };
@@ -2403,21 +2423,67 @@ struct RangeRow {
     starts_row: bool,
     /// The range reaches the row's last visible glyph (or its newline).
     reaches_row_end: bool,
+    /// The buffer text the row's edges are measured from.
+    source: Range<usize>,
+}
+
+fn block_layout(last_layout: &LastLayout) -> BlockLayout {
+    BlockLayout {
+        line_height: last_layout.line_height,
+        space_width: last_layout.space_width,
+        wrap_width: last_layout.wrap_width,
+        wrapping_indent: last_layout.wrapping_indent,
+        text_align: last_layout.text_align,
+        content_width: (last_layout.text_align != TextAlign::Left)
+            .then_some(last_layout.content_width),
+    }
+}
+
+/// The block's left and right edges across the whole range, not only the rows
+/// in view. An edge measured from a row that has since scrolled out of view is
+/// kept, so the frame holds its size while scrolling. Once that row is back in
+/// view it is measured afresh, so a row that got shorter lets the frame shrink.
+fn remember_block_edges(
+    rows: &[RangeRow],
+    memory: &mut BlockMemory,
+    layout: BlockLayout,
+    is_line_visible: impl Fn(usize) -> bool,
+) -> (Option<Pixels>, Option<Pixels>) {
+    if memory.layout != Some(layout) {
+        *memory = BlockMemory {
+            layout: Some(layout),
+            ..BlockMemory::default()
+        };
+    }
+    let edge = |row: &RangeRow, x: Pixels| BlockEdge {
+        x,
+        source: row.source.clone(),
+    };
+    let hidden = |edge: &BlockEdge| !is_line_visible(edge.source.start);
+    let left = rows
+        .iter()
+        .filter(|row| row.starts_row)
+        .map(|row| edge(row, row.corners.top_left.x))
+        .chain(memory.left.take().filter(hidden))
+        .min_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(Ordering::Equal));
+    let right = rows
+        .iter()
+        .map(|row| edge(row, row.corners.top_right.x))
+        .chain(memory.right.take().filter(hidden))
+        .max_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(Ordering::Equal));
+    memory.left = left.clone();
+    memory.right = right.clone();
+    (left.map(|edge| edge.x), right.map(|edge| edge.x))
 }
 
 /// Square off ragged rows into the block the range spans. A row keeps its own
 /// edge on a side the range only partly covers, so text sharing that row but
 /// sitting outside the range stays outside the frame.
-fn block_corners(rows: Vec<RangeRow>) -> Vec<Corners<Point<Pixels>>> {
-    let left = rows
-        .iter()
-        .filter(|row| row.starts_row)
-        .map(|row| row.corners.top_left.x)
-        .reduce(Pixels::min);
-    let right = rows
-        .iter()
-        .map(|row| row.corners.top_right.x)
-        .reduce(Pixels::max);
+fn block_corners(
+    rows: Vec<RangeRow>,
+    left: Option<Pixels>,
+    right: Option<Pixels>,
+) -> Vec<Corners<Point<Pixels>>> {
     rows.into_iter()
         .map(|row| {
             let mut corners = row.corners;
@@ -3630,7 +3696,9 @@ fn split_runs_by_bg_segments(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::{EditorMode, EditorState, FoldRange, RangeDecoration, Redo, Undo};
+    use crate::input::{
+        EditorMode, EditorState, FoldRange, RangeDecoration, Redo, Undo, WrappingIndent,
+    };
     use gpui::{
         AppContext as _, Context, EntityInputHandler as _, Render, TestAppContext,
         VisualTestContext, div,
@@ -4284,25 +4352,58 @@ mod tests {
         );
     }
 
+    fn block_row(
+        left: f32,
+        right: f32,
+        line: usize,
+        starts_row: bool,
+        reaches_row_end: bool,
+    ) -> RangeRow {
+        let y = line as f32 * 10.;
+        RangeRow {
+            corners: Corners {
+                top_left: point(px(left), px(y)),
+                top_right: point(px(right), px(y)),
+                bottom_left: point(px(left), px(y + 10.)),
+                bottom_right: point(px(right), px(y + 10.)),
+            },
+            starts_row,
+            reaches_row_end,
+            // Ten bytes a line keeps each row's source on its own line.
+            source: line * 10..line * 10 + 5,
+        }
+    }
+
+    fn test_block_layout() -> BlockLayout {
+        BlockLayout {
+            line_height: px(10.),
+            space_width: px(5.),
+            wrap_width: None,
+            wrapping_indent: WrappingIndent::default(),
+            text_align: TextAlign::Left,
+            content_width: None,
+        }
+    }
+
+    /// Measure a block from `rows` alone, as its first frame does.
+    fn fresh_block_corners(rows: Vec<RangeRow>) -> Vec<Corners<Point<Pixels>>> {
+        let (left, right) = remember_block_edges(
+            &rows,
+            &mut BlockMemory::default(),
+            test_block_layout(),
+            |_| true,
+        );
+        block_corners(rows, left, right)
+    }
+
     #[test]
     fn block_corners_square_off_ragged_rows_but_keep_partial_edges() {
-        let row =
-            |left: f32, right: f32, y: f32, starts_row: bool, reaches_row_end: bool| RangeRow {
-                corners: Corners {
-                    top_left: point(px(left), px(y)),
-                    top_right: point(px(right), px(y)),
-                    bottom_left: point(px(left), px(y + 10.)),
-                    bottom_right: point(px(right), px(y + 10.)),
-                },
-                starts_row,
-                reaches_row_end,
-            };
         // "SELECT" / "* FROM some_table" / "WHERE 1; SELECT ..." where the
         // range starts mid-row on the first line and ends mid-row on the last.
-        let corners = block_corners(vec![
-            row(30., 50., 0., false, true),
-            row(0., 90., 10., true, true),
-            row(0., 40., 20., true, false),
+        let corners = fresh_block_corners(vec![
+            block_row(30., 50., 0, false, true),
+            block_row(0., 90., 1, true, true),
+            block_row(0., 40., 2, true, false),
         ]);
         let edges = corners
             .iter()
@@ -4313,6 +4414,53 @@ mod tests {
             vec![(px(30.), px(90.)), (px(0.), px(90.)), (px(0.), px(40.)),]
         );
         assert_eq!(corners[1].bottom_right.x, px(90.));
+    }
+
+    #[test]
+    fn block_keeps_its_width_while_the_widest_row_is_scrolled_out_of_view() {
+        let mut memory = BlockMemory::default();
+        let layout = test_block_layout();
+        let right = |rows: &[RangeRow], memory: &mut BlockMemory, visible: &[usize]| {
+            remember_block_edges(rows, memory, layout, |line| visible.contains(&line)).1
+        };
+
+        // All three lines in view, the first is the widest.
+        let all = [
+            block_row(0., 90., 0, true, true),
+            block_row(0., 40., 1, true, true),
+            block_row(0., 60., 2, true, true),
+        ];
+        assert_eq!(right(&all, &mut memory, &[0, 10, 20]), Some(px(90.)));
+
+        // Scrolled down past the first line.
+        let scrolled = [
+            block_row(0., 40., 1, true, true),
+            block_row(0., 60., 2, true, true),
+        ];
+        assert_eq!(right(&scrolled, &mut memory, &[10, 20]), Some(px(90.)));
+        assert_eq!(right(&scrolled[1..], &mut memory, &[20]), Some(px(90.)));
+
+        // Back in view, the first line is measured again, so a line that got
+        // shorter while off screen lets the block shrink.
+        let shortened = [
+            block_row(0., 50., 0, true, true),
+            block_row(0., 40., 1, true, true),
+            block_row(0., 60., 2, true, true),
+        ];
+        assert_eq!(right(&shortened, &mut memory, &[0, 10, 20]), Some(px(60.)));
+
+        // Edges measured in another layout do not carry over.
+        assert_eq!(right(&scrolled, &mut memory, &[10, 20]), Some(px(60.)));
+        let (_, wider_font) = remember_block_edges(
+            &scrolled[..1],
+            &mut memory,
+            BlockLayout {
+                space_width: px(6.),
+                ..layout
+            },
+            |line| line == 10,
+        );
+        assert_eq!(wider_font, Some(px(40.)));
     }
 
     #[gpui::test]
@@ -4341,7 +4489,7 @@ mod tests {
             let widest = rows[1].corners.top_right.x;
             assert!(widest > rows[0].corners.top_right.x);
             assert!(widest > rows[2].corners.top_right.x);
-            let corners = block_corners(rows);
+            let corners = fresh_block_corners(rows);
             assert_eq!(corners[0].top_right.x, widest);
             assert_eq!(corners[1].top_right.x, widest);
             assert!(corners[2].top_right.x < widest);

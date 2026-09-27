@@ -1,11 +1,12 @@
 use crate::input::EditorMode;
-use std::{collections::BTreeMap, ops::Range};
+use std::{cell::RefCell, collections::BTreeMap, ops::Range};
 
-use gpui::{App, Context, HighlightStyle, Hsla, WeakEntity};
+use gpui::{App, Context, HighlightStyle, Hsla, Pixels, TextAlign, WeakEntity};
 use ropey::Rope;
 use sum_tree::Bias;
 
 use super::{InputBaseState, RopeExt as _};
+use crate::input::WrappingIndent;
 
 /// Geometric presentation for an editor range decoration.
 #[non_exhaustive]
@@ -28,11 +29,67 @@ pub enum RangeDecorationStyle {
 }
 
 /// A geometric decoration over a UTF-8 byte range.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct RangeDecoration {
     range: Range<usize>,
     style: RangeDecorationStyle,
     color: Option<Hsla>,
+    /// Paint state of a [`RangeDecorationStyle::Block`], not part of its identity.
+    block: RefCell<BlockMemory>,
+}
+
+impl PartialEq for RangeDecoration {
+    fn eq(&self, other: &Self) -> bool {
+        self.range == other.range && self.style == other.style && self.color == other.color
+    }
+}
+
+/// The layout a [`BlockMemory`] was measured in. Edges measured under another
+/// font, wrap width or alignment say nothing about the current one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BlockLayout {
+    pub(crate) line_height: Pixels,
+    pub(crate) space_width: Pixels,
+    pub(crate) wrap_width: Option<Pixels>,
+    pub(crate) wrapping_indent: WrappingIndent,
+    pub(crate) text_align: TextAlign,
+    /// Only centered and right-aligned rows move with the content width.
+    pub(crate) content_width: Option<Pixels>,
+}
+
+/// The edges a block frame last measured, so a row scrolling out of view
+/// takes neither its edge nor the frame's width with it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BlockMemory {
+    pub(crate) layout: Option<BlockLayout>,
+    pub(crate) left: Option<BlockEdge>,
+    pub(crate) right: Option<BlockEdge>,
+}
+
+/// One edge of a block frame and the text it was measured from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct BlockEdge {
+    pub(crate) x: Pixels,
+    /// From the start of the edge's buffer line to where the range stops on
+    /// its row. An edit outside this text cannot move the edge.
+    pub(crate) source: Range<usize>,
+}
+
+impl BlockMemory {
+    /// Keep an edge only while the text it was measured from is untouched.
+    fn adjust_for_edit(&mut self, edited_range: &Range<usize>, inserted_len: usize) {
+        for edge in [&mut self.left, &mut self.right] {
+            *edge = edge
+                .take()
+                .filter(|edge| {
+                    edited_range.start >= edge.source.end || edited_range.end < edge.source.start
+                })
+                .map(|mut edge| {
+                    edge.source = adjust_range_for_edit(&edge.source, edited_range, inserted_len);
+                    edge
+                });
+        }
+    }
 }
 
 impl RangeDecoration {
@@ -42,6 +99,7 @@ impl RangeDecoration {
             range,
             style: RangeDecorationStyle::default(),
             color: None,
+            block: RefCell::default(),
         }
     }
 
@@ -70,6 +128,10 @@ impl RangeDecoration {
     pub fn with_color(mut self, color: Hsla) -> Self {
         self.color = Some(color);
         self
+    }
+
+    pub(crate) fn block_memory(&self) -> &RefCell<BlockMemory> {
+        &self.block
     }
 }
 
@@ -231,6 +293,8 @@ impl RangeDecorationCollection {
 pub(crate) trait TrackedDecoration: PartialEq {
     fn range(&self) -> &Range<usize>;
     fn range_mut(&mut self) -> &mut Range<usize>;
+    /// Adjust any paint state kept in buffer offsets, before the range itself.
+    fn adjust_paint_state_for_edit(&mut self, _edited_range: &Range<usize>, _inserted_len: usize) {}
 }
 
 impl TrackedDecoration for TextDecoration {
@@ -248,6 +312,11 @@ impl TrackedDecoration for RangeDecoration {
     }
     fn range_mut(&mut self) -> &mut Range<usize> {
         &mut self.range
+    }
+    fn adjust_paint_state_for_edit(&mut self, edited_range: &Range<usize>, inserted_len: usize) {
+        self.block
+            .get_mut()
+            .adjust_for_edit(edited_range, inserted_len);
     }
 }
 
@@ -391,6 +460,7 @@ impl<T: TrackedDecoration> DecorationCollections<T> {
             let mut remap = Vec::with_capacity(len);
             let mut retained = 0;
             entry.decorations.retain_mut(|decoration| {
+                decoration.adjust_paint_state_for_edit(edited_range, inserted_len);
                 *decoration.range_mut() =
                     adjust_range_for_edit(decoration.range(), edited_range, inserted_len);
                 let keep = !decoration.range().is_empty();
@@ -574,6 +644,33 @@ impl InputBaseState<EditorMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_block_edge_survives_edits_outside_the_text_it_was_measured_from() {
+        let edge = |source: Range<usize>| BlockEdge {
+            x: gpui::px(10.),
+            source,
+        };
+        let mut memory = BlockMemory {
+            layout: None,
+            left: Some(edge(0..4)),
+            right: Some(edge(10..20)),
+        };
+        // Typing on another line shifts the right edge's text along.
+        memory.adjust_for_edit(&(6..6), 2);
+        assert_eq!(memory.left, Some(edge(0..4)));
+        assert_eq!(memory.right, Some(edge(12..22)));
+        // Typing where the range stops on the right edge's row cannot widen it.
+        memory.adjust_for_edit(&(22..22), 1);
+        assert_eq!(memory.right, Some(edge(12..22)));
+        // Typing inside it can.
+        memory.adjust_for_edit(&(15..15), 1);
+        assert_eq!(memory.left, Some(edge(0..4)));
+        assert_eq!(memory.right, None);
+        // So can typing at the start of the line, which pushes its text along.
+        memory.adjust_for_edit(&(0..0), 1);
+        assert_eq!(memory.left, None);
+    }
 
     #[test]
     fn setting_unchanged_entries_changes_nothing() {
