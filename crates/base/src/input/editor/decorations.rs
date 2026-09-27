@@ -16,6 +16,15 @@ pub enum RangeDecorationStyle {
     /// Draw a continuous one-pixel frame around the visual range.
     #[default]
     Frame,
+    /// Draw a one-pixel frame around the rectangular block the range spans.
+    ///
+    /// Rows the range covers to their last visible glyph share the widest
+    /// row's right edge, and rows it covers from their first glyph share the
+    /// leftmost row's left edge, so ragged line endings inside the range do not
+    /// notch the frame. A row the range only partly covers keeps its own edge on
+    /// that side, so text before or after the range on the same row stays
+    /// outside the frame.
+    Block,
 }
 
 /// A geometric decoration over a UTF-8 byte range.
