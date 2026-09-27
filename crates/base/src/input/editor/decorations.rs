@@ -518,7 +518,7 @@ impl OverviewRulerDecorationCollection {
 }
 
 /// Both text styles and geometric decorations share normalization and edit affinity.
-pub(crate) trait TrackedDecoration {
+pub(crate) trait TrackedDecoration: PartialEq {
     /// Whether an empty range is a decoration of its own, a line boundary, rather
     /// than nothing. Such a range survives the edits that empty it and stays before
     /// text inserted at its offset.
@@ -678,10 +678,15 @@ impl<T: TrackedDecoration> DecorationCollections<T> {
         id
     }
 
+    /// Returns whether anything changed, so an owner that refreshes its
+    /// entries from an editor observer does not notify the editor it observes.
     fn set(&mut self, id: DecorationCollectionId, decorations: Vec<T>) -> bool {
         let Some(current) = self.entries.get_mut(&id) else {
             return false;
         };
+        if current.decorations == decorations {
+            return false;
+        }
         *current = DecorationEntries::new(decorations);
         self.revision += 1;
         true
@@ -691,6 +696,9 @@ impl<T: TrackedDecoration> DecorationCollections<T> {
         let Some(current) = self.entries.get_mut(&id) else {
             return false;
         };
+        if decorations.is_empty() {
+            return false;
+        }
         current.decorations.extend(decorations);
         current.reindex();
         self.revision += 1;
@@ -1021,6 +1029,25 @@ impl InputBaseState<EditorMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn setting_unchanged_entries_changes_nothing() {
+        let mut collections = DecorationCollections::<RangeDecoration>::default();
+        let id = collections.create(vec![RangeDecoration::new(0..4)]);
+        assert!(!collections.set(id, vec![RangeDecoration::new(0..4)]));
+        assert!(!collections.append(id, Vec::new()));
+        assert!(collections.set(
+            id,
+            vec![RangeDecoration::new(0..4).with_style(RangeDecorationStyle::Fill)]
+        ));
+        assert!(collections.set(id, Vec::new()));
+        assert!(!collections.set(id, Vec::new()));
+        assert!(collections.append(id, vec![RangeDecoration::new(1..2)]));
+        assert_eq!(
+            collections.get(id).unwrap(),
+            &[RangeDecoration::new(1..2)][..]
+        );
+    }
 
     #[test]
     fn geometric_collections_share_utf8_normalization_and_edit_affinity() {
