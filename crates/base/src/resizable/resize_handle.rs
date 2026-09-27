@@ -36,6 +36,7 @@ pub struct ResizeHandleContext {
     axis: Axis,
     edge: Option<HandleEdge>,
     state: ResizeHandleState,
+    invisible: bool,
 }
 
 impl ResizeHandleContext {
@@ -53,6 +54,16 @@ impl ResizeHandleContext {
     /// what the container does with that.
     pub fn edge(&self) -> Option<HandleEdge> {
         self.edge
+    }
+
+    /// Whether the handle's group asked for its resting line to be hidden,
+    /// see [`ResizablePanelGroup::invisible_handles`]. A renderer should still
+    /// show the handle while the pointer engages it, so the split stays
+    /// discoverable.
+    ///
+    /// [`ResizablePanelGroup::invisible_handles`]: crate::ResizablePanelGroup::invisible_handles
+    pub fn is_invisible(&self) -> bool {
+        self.invisible
     }
 
     /// Whether the pointer currently owns this handle.
@@ -333,6 +344,7 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                                     axis,
                                     edge,
                                     state: state.get(),
+                                    invisible: self.invisible,
                                 },
                                 window,
                                 cx,

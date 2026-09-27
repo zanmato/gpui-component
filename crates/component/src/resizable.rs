@@ -90,7 +90,7 @@ pub(crate) fn render_resize_handle(
         // nothing to give: shrinking it collapses the divider.
         .flex_none()
         .flex()
-        .bg(cx.theme().border)
+        .when(!handle.is_invisible(), |line| line.bg(cx.theme().border))
         // Along the hairline the pill is far shorter than the line, so centring
         // it there is safe. Across the hairline it is thicker than the line and
         // has to overhang, and neither flex alignment can be trusted to centre
