@@ -3759,7 +3759,7 @@ mod tests {
             let menu_focus = cx.focus_handle();
             let other_focus = cx.focus_handle();
             editor.update(cx, |state, cx| {
-                state.set_selected_range(0..5, cx);
+                state.set_selected_range(0..5, window, cx);
                 state.focus(window, cx);
             });
 

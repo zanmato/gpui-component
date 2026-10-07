@@ -489,7 +489,7 @@ fn right_click_on_unfocused_input_keeps_selection(cx: &mut TestAppContext) {
     cx.update_window(handle.into(), |_, window, cx| {
         source.update(cx, |state, cx| {
             state.set_value("alpha\ncopy", window, cx);
-            state.set_selected_range(6..10, cx);
+            state.set_selected_range(6..10, window, cx);
         });
         window.click("other-input", cx);
         window.render_frame(cx);
@@ -531,7 +531,7 @@ fn submenu_select_all_uses_the_parent_input_action_target(cx: &mut TestAppContex
     cx.update_window(handle.into(), |_, window, cx| {
         source.update(cx, |state, cx| {
             state.set_value("alpha\ncopy", window, cx);
-            state.set_selected_range(6..10, cx);
+            state.set_selected_range(6..10, window, cx);
         });
         window.click("other-input", cx);
         window.input("other", cx);

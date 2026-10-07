@@ -4903,7 +4903,7 @@ mod tests {
                     state.set_token_presentation(
                         InlineTokenPresentation::default().on_token_hover(|_, _, _| {}),
                     );
-                    state.set_selected_range(0..0, cx);
+                    state.set_selected_range(0..0, window, cx);
                 });
             })
             .unwrap();
@@ -8138,7 +8138,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value("é ", window, cx);
-                state.set_selected_range(3..3, cx);
+                state.set_selected_range(3..3, window, cx);
                 // g k s r m f: "ㅎ" -> "하" -> "한", then "ㄱ" -> "그" -> "글"
                 state.replace_text_in_range(None, "ㅎ", window, cx);
                 state.replace_text_in_range(Some(2..3), "하", window, cx);

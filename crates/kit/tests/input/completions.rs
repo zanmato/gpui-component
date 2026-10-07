@@ -275,8 +275,11 @@ impl Fixture {
     }
 
     fn select(&self, range: std::ops::Range<usize>, cx: &mut TestAppContext) {
-        self.state
-            .update(cx, |state, cx| state.set_selected_range(range, cx));
+        cx.update_window(self.handle.into(), |_, window, cx| {
+            self.state
+                .update(cx, |state, cx| state.set_selected_range(range, window, cx));
+        })
+        .unwrap();
         self.settle(cx);
     }
 
