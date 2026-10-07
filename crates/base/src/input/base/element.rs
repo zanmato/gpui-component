@@ -2997,13 +2997,16 @@ impl<M: InputModeKind> Element for TextElement<M> {
         let hover_highlight_path = self.layout_hover_highlight(&last_layout, &mut bounds, cx);
         let document_color_paths =
             self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
-        let (range_decoration_fills, range_decoration_frames) = self.layout_range_decorations(
-            &last_layout,
-            &bounds,
-            window,
-            window.content_mask().bounds,
-            cx,
-        );
+        // The gutter is painted over the text, so a frame at the first column
+        // has to stop at the gutter's edge to keep its left side in view.
+        let mut frame_mask = window.content_mask().bounds;
+        let gutter_right = original_x + last_layout.line_number_width;
+        if gutter_right > frame_mask.left() {
+            frame_mask.size.width = (frame_mask.right() - gutter_right).max(px(0.));
+            frame_mask.origin.x = gutter_right;
+        }
+        let (range_decoration_fills, range_decoration_frames) =
+            self.layout_range_decorations(&last_layout, &bounds, window, frame_mask, cx);
 
         let state = self.state.read(cx);
         // One line has no gutter to number and no other line to set the
