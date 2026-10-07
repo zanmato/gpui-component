@@ -497,7 +497,9 @@ fn typing_keeps_an_interior_caret_visible_in_one_row_viewports(cx: &mut TestAppC
         });
         cx.update_window(handle.into(), |_, window, cx| {
             window.click(target(&text), cx);
-            text.update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
+            text.update(cx, |state, cx| {
+                state.set_selected_range(offset..offset, window, cx)
+            });
             window.render_frame(cx);
             let (caret, line_height) = text.read(cx).cursor_layout().unwrap();
             let viewport = text.read(cx).input_bounds();
@@ -527,7 +529,9 @@ fn horizontal_movement_does_not_scroll_a_fully_visible_row(cx: &mut TestAppConte
     let (handle, _, text) = composer(cx, |state| state.rows(4).default_value(value));
     cx.update_window(handle.into(), |_, window, cx| {
         window.click(target(&text), cx);
-        text.update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
+        text.update(cx, |state, cx| {
+            state.set_selected_range(offset..offset, window, cx)
+        });
         window.render_frame(cx);
         let (caret, line_height) = text.read(cx).cursor_layout().unwrap();
         let row_top = caret.top() - (line_height - caret.size.height) / 2.;
