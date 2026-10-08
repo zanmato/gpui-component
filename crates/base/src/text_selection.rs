@@ -2831,8 +2831,11 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
     });
 
     let mouse_up_state = state.downgrade();
+    // On capture: an element that handles the click stops the release from
+    // bubbling, and a gesture left open would follow the pointer with no
+    // button held.
     window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-        if phase.bubble()
+        if phase.capture()
             && let Some(state) = mouse_up_state.upgrade()
         {
             state.update(cx, |state, cx| {
@@ -2900,8 +2903,9 @@ mod tests {
     use crate::ElementExt as _;
     use gpui::{
         Bounds, ContentMask, Context, Hitbox, HitboxBehavior, HitboxId, InteractiveElement as _,
-        IntoElement, ParentElement as _, Render, SharedString, Styled as _, StyledText,
-        TestAppContext, TextLayout, Window, div, point, prelude::FluentBuilder as _, px, size,
+        IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
+        Styled as _, StyledText, TestAppContext, TextLayout, Window, div, point,
+        prelude::FluentBuilder as _, px, size,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -2923,6 +2927,10 @@ mod tests {
     }
 
     struct DoubleSelectionElementView {
+        selection: TextSelectionHandle,
+    }
+
+    struct ClickStoppingChildView {
         selection: TextSelectionHandle,
     }
 
@@ -2994,6 +3002,42 @@ mod tests {
                         cx,
                     );
                 })
+        }
+    }
+
+    impl Render for ClickStoppingChildView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let selection = self.selection.clone();
+            div()
+                .size_full()
+                .child(TextSelectionLayer)
+                .child(
+                    div()
+                        .id("click-target")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w(px(100.))
+                        .h(px(20.))
+                        .on_click(|_, _, cx| cx.stop_propagation()),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(40.))
+                        .left_0()
+                        .w(px(100.))
+                        .h(px(20.))
+                        .on_prepaint(move |bounds, window, cx| {
+                            let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+                            selection.register(
+                                TextSelectionRegistration::new(hitbox, bounds)
+                                    .with_text_bounds(vec![bounds]),
+                                window,
+                                cx,
+                            );
+                        }),
+                )
         }
     }
 
@@ -4430,6 +4474,30 @@ mod tests {
         );
         cx.update(|window, cx| assert!(TextSelection::has_selection(window, cx)));
         assert_eq!(clear_count.get(), 3);
+    }
+
+    #[gpui::test]
+    fn click_that_stops_the_mouse_up_still_ends_the_gesture(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| ClickStoppingChildView {
+            selection: TextSelectionHandle::new("participant", cx),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        // A click on an element that consumes it, the way a table cell does.
+        let click = point(px(10.), px(10.));
+        cx.simulate_mouse_down(click, MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_up(click, MouseButton::Left, gpui::Modifiers::default());
+
+        // The pointer then travels over the text with no button held.
+        cx.simulate_mouse_move(point(px(50.), px(50.)), None, gpui::Modifiers::default());
+        cx.update(|window, cx| {
+            let state = WindowSelectionState::ensure(window, cx);
+            assert!(!state.read(cx).is_selecting());
+            assert!(view.read(cx).selection.snapshot(cx).is_none());
+            assert!(!TextSelection::has_selection(window, cx));
+        });
     }
 
     #[gpui::test]
