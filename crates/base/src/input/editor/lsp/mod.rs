@@ -13,6 +13,7 @@ mod hover;
 mod overlay;
 mod semantic_tokens;
 mod signature_help;
+mod snippet;
 
 pub use code_actions::*;
 pub use completions::*;
