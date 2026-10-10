@@ -257,7 +257,11 @@ impl<M: InputModeKind> InputBaseState<M> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // First, try to accept inline completion if present
+        // An open completion menu takes Tab first when Tab accepts.
+        if M::handle_context_menu_action(self, Box::new(IndentInline), window, cx) {
+            return;
+        }
+        // Then try to accept inline completion if present
         if M::accept_inline_completion(self, window, cx) {
             return;
         }

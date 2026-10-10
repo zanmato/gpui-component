@@ -251,7 +251,8 @@ impl CompletionMenu {
         }
 
         cx.propagate();
-        if input::Enter::is_primary(&*action) {
+        // The editor forwards Enter and Tab only when they accept.
+        if input::Enter::is_primary(&*action) || action.partial_eq(&input::IndentInline) {
             self.on_action_enter(window, cx);
         } else if action.partial_eq(&input::Escape) {
             self.on_action_escape(window, cx);
