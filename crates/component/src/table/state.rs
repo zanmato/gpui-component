@@ -17,10 +17,23 @@ use gpui::{
     FocusHandle, Focusable, InteractiveElement, IntoElement, ListSizingBehavior, MouseButton,
     MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollStrategy, SharedString, Stateful,
     StatefulInteractiveElement as _, Styled, Task, UniformListScrollHandle, Window, div,
-    prelude::FluentBuilder, px, uniform_list,
+    prelude::FluentBuilder, px, rems, uniform_list,
 };
 
 use super::*;
+
+/// Where the column at `ix` ends up after the column at `from` moves to `to`.
+fn moved_index(ix: usize, from: usize, to: usize) -> usize {
+    if ix == from {
+        to
+    } else if from < to && (from + 1..=to).contains(&ix) {
+        ix - 1
+    } else if to < from && (to..from).contains(&ix) {
+        ix + 1
+    } else {
+        ix
+    }
+}
 
 /// How far behind the pointer a resize drag trails the column edge.
 const HANDLE_SIZE: Pixels = px(2.);
@@ -218,6 +231,8 @@ pub struct TableState<D: TableDelegate> {
     fixed_head_cols_bounds: Bounds<Pixels>,
 
     col_groups: Vec<ColGroup>,
+    /// The sorted columns in key order, the first one sorting first.
+    sort_keys: Vec<usize>,
     header_layout: Vec<Vec<HeaderCell>>,
 
     /// Whether the table can loop selection, default is true.
@@ -298,6 +313,7 @@ where
             options: TableOptions::default(),
             delegate,
             col_groups: Vec::new(),
+            sort_keys: Vec::new(),
             header_layout: Vec::new(),
             horizontal_scroll_handle: VirtualListScrollHandle::new(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
@@ -773,6 +789,7 @@ where
     }
 
     fn prepare_col_groups(&mut self, cx: &mut Context<Self>) {
+        self.sort_keys.clear();
         self.col_groups = (0..self.delegate.columns_count(cx))
             .map(|col_ix| {
                 let column = self.delegate().column(col_ix, cx);
@@ -1367,34 +1384,67 @@ where
         }
     }
 
-    fn perform_sort(&mut self, col_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// The sort keys in order, each a column index and its direction.
+    pub fn sort_keys(&self) -> Vec<(usize, ColumnSort)> {
+        self.sort_keys
+            .iter()
+            .filter_map(|&col_ix| {
+                let sort = self.col_groups.get(col_ix)?.column.sort?;
+                Some((col_ix, sort))
+            })
+            .collect()
+    }
+
+    /// Step the sort of the column at `col_ix`. With `add_key`, and when the
+    /// delegate sorts by several columns, the other keys stay and the column
+    /// is added as the next key; otherwise it becomes the only one.
+    fn perform_sort(
+        &mut self,
+        col_ix: usize,
+        add_key: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.sortable {
             return;
         }
 
-        let sort = self.col_groups.get(col_ix).and_then(|g| g.column.sort);
-        if sort.is_none() {
+        let Some(sort) = self.col_groups.get(col_ix).and_then(|g| g.column.sort) else {
             return;
-        }
+        };
 
-        let sort = sort.unwrap();
         let sort = match sort {
             ColumnSort::Ascending => ColumnSort::Default,
             ColumnSort::Descending => ColumnSort::Ascending,
             ColumnSort::Default => ColumnSort::Descending,
         };
+        let add_key = add_key && self.delegate.multi_sortable();
 
-        for (ix, col_group) in self.col_groups.iter_mut().enumerate() {
-            if ix == col_ix {
-                col_group.column.sort = Some(sort);
-            } else {
-                if col_group.column.sort.is_some() {
+        if !add_key {
+            for (ix, col_group) in self.col_groups.iter_mut().enumerate() {
+                if ix == col_ix {
+                    col_group.column.sort = Some(sort);
+                } else if col_group.column.sort.is_some() {
                     col_group.column.sort = Some(ColumnSort::Default);
                 }
             }
+            self.sort_keys.clear();
+            if sort != ColumnSort::Default {
+                self.sort_keys.push(col_ix);
+            }
+            self.delegate_mut().perform_sort(col_ix, sort, window, cx);
+            cx.notify();
+            return;
         }
 
-        self.delegate_mut().perform_sort(col_ix, sort, window, cx);
+        self.col_groups[col_ix].column.sort = Some(sort);
+        if sort == ColumnSort::Default {
+            self.sort_keys.retain(|&ix| ix != col_ix);
+        } else if !self.sort_keys.contains(&col_ix) {
+            self.sort_keys.push(col_ix);
+        }
+        let keys = self.sort_keys();
+        self.delegate_mut().perform_multi_sort(&keys, window, cx);
 
         cx.notify();
     }
@@ -1413,6 +1463,9 @@ where
         self.delegate.move_column(col_ix, to_ix, window, cx);
         let col_group = self.col_groups.remove(col_ix);
         self.col_groups.insert(to_ix, col_group);
+        for key in &mut self.sort_keys {
+            *key = moved_index(*key, col_ix, to_ix);
+        }
 
         cx.emit(TableEvent::MoveColumn(col_ix, to_ix));
         cx.notify();
@@ -1799,6 +1852,11 @@ where
             ColumnSort::Descending => (IconName::SortDescending, true),
             ColumnSort::Default => (IconName::ChevronsUpDown, false),
         };
+        // With more than one key, each sorted column shows its place.
+        let key_position = (self.sort_keys.len() > 1)
+            .then(|| self.sort_keys.iter().position(|&ix| ix == col_ix))
+            .flatten()
+            .map(|position| position + 1);
 
         Some(
             div()
@@ -1811,14 +1869,26 @@ where
                 })
                 .hover(|this| this.bg(cx.theme().tokens.secondary).opacity(7.))
                 .active(|this| this.bg(cx.theme().tokens.secondary_active).opacity(1.))
-                .on_click(
-                    cx.listener(move |table, _, window, cx| table.perform_sort(col_ix, window, cx)),
-                )
+                .on_click(cx.listener(move |table, e: &ClickEvent, window, cx| {
+                    table.perform_sort(col_ix, e.modifiers().shift, window, cx)
+                }))
+                .when(key_position.is_some(), |this| {
+                    this.flex().items_center().gap(px(1.))
+                })
                 .child(
                     Icon::new(icon)
                         .size_3()
                         .text_color(cx.theme().secondary_foreground),
-                ),
+                )
+                .when_some(key_position, |this, position| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .line_height(rems(0.75))
+                            .text_color(cx.theme().secondary_foreground)
+                            .child(position.to_string()),
+                    )
+                }),
         )
     }
 
@@ -2822,5 +2892,135 @@ where
                         ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use gpui::{App, TestAppContext, WindowHandle};
+
+    use super::*;
+
+    type Calls = Rc<RefCell<Vec<Vec<(usize, ColumnSort)>>>>;
+
+    struct SortDelegate {
+        multi: bool,
+        calls: Calls,
+    }
+
+    impl TableDelegate for SortDelegate {
+        fn columns_count(&self, _: &App) -> usize {
+            3
+        }
+
+        fn rows_count(&self, _: &App) -> usize {
+            0
+        }
+
+        fn column(&self, col_ix: usize, _: &App) -> Column {
+            let name = format!("c{col_ix}");
+            Column::new(name.clone(), name).sortable()
+        }
+
+        fn render_td(
+            &mut self,
+            _: usize,
+            _: usize,
+            _: &mut Window,
+            _: &mut Context<TableState<Self>>,
+        ) -> impl IntoElement {
+            div()
+        }
+
+        fn perform_sort(
+            &mut self,
+            col_ix: usize,
+            sort: ColumnSort,
+            _: &mut Window,
+            _: &mut Context<TableState<Self>>,
+        ) {
+            self.calls.borrow_mut().push(vec![(col_ix, sort)]);
+        }
+
+        fn multi_sortable(&self) -> bool {
+            self.multi
+        }
+
+        fn perform_multi_sort(
+            &mut self,
+            keys: &[(usize, ColumnSort)],
+            _: &mut Window,
+            _: &mut Context<TableState<Self>>,
+        ) {
+            self.calls.borrow_mut().push(keys.to_vec());
+        }
+    }
+
+    fn table(
+        multi: bool,
+        cx: &mut TestAppContext,
+    ) -> (WindowHandle<TableState<SortDelegate>>, Calls) {
+        cx.skip_drawing();
+        let calls = Calls::default();
+        let delegate = SortDelegate {
+            multi,
+            calls: calls.clone(),
+        };
+        let window = cx.add_window(move |window, cx| TableState::new(delegate, window, cx));
+        (window, calls)
+    }
+
+    #[gpui::test]
+    fn shift_click_adds_sort_keys(cx: &mut TestAppContext) {
+        use ColumnSort::*;
+        let (window, calls) = table(true, cx);
+        window
+            .update(cx, |table, window, cx| {
+                table.perform_sort(1, false, window, cx);
+                table.perform_sort(0, true, window, cx);
+                table.perform_sort(2, true, window, cx);
+                assert_eq!(
+                    table.sort_keys(),
+                    [(1, Descending), (0, Descending), (2, Descending)]
+                );
+
+                // Stepping a key keeps its place, and its last step drops it.
+                table.perform_sort(0, true, window, cx);
+                assert_eq!(
+                    table.sort_keys(),
+                    [(1, Descending), (0, Ascending), (2, Descending)]
+                );
+                table.perform_sort(0, true, window, cx);
+                assert_eq!(table.sort_keys(), [(1, Descending), (2, Descending)]);
+
+                // Moving a column carries its key along.
+                table.move_column(2, 0, window, cx);
+                assert_eq!(table.sort_keys(), [(2, Descending), (0, Descending)]);
+
+                // A plain click goes back to one key.
+                table.perform_sort(1, false, window, cx);
+                assert_eq!(table.sort_keys(), [(1, Descending)]);
+            })
+            .unwrap();
+        assert_eq!(
+            calls.borrow().last(),
+            Some(&vec![(1, Descending)]),
+            "a plain click sorts through perform_sort"
+        );
+    }
+
+    #[gpui::test]
+    fn shift_click_is_a_plain_click_without_multi_sort(cx: &mut TestAppContext) {
+        let (window, calls) = table(false, cx);
+        window
+            .update(cx, |table, window, cx| {
+                table.perform_sort(1, false, window, cx);
+                table.perform_sort(0, true, window, cx);
+                assert_eq!(table.sort_keys(), [(0, ColumnSort::Descending)]);
+            })
+            .unwrap();
+        assert_eq!(calls.borrow().len(), 2);
     }
 }
