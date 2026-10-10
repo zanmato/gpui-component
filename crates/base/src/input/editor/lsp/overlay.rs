@@ -189,10 +189,27 @@ impl InputBaseState<EditorMode> {
             new_text.clone_from(insert_text);
             range = range.end..range.end;
         }
+        // A snippet is inserted without its tab stop markers, with the caret
+        // on its first stop.
+        let caret =
+            (item.insert_text_format == Some(lsp_types::InsertTextFormat::SNIPPET)).then(|| {
+                let expanded = super::snippet::expand_snippet(&new_text);
+                new_text = expanded.text;
+                expanded.caret
+            });
+        let single_cursor = self.selections.is_single();
+        let start = range.start;
         self.completion_inserting = true;
         let range = self.range_to_utf16(&range);
         self.replace_text_in_range_silent(Some(range), &new_text, window, cx);
         self.completion_inserting = false;
+        // With several cursors the text went in at each of them; only a single
+        // insertion has an unambiguous place for the caret.
+        if let Some(caret) = caret
+            && single_cursor
+        {
+            self.set_selected_range(start + caret.start..start + caret.end, window, cx);
+        }
         self.focus(window, cx);
     }
 
