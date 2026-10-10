@@ -24,13 +24,13 @@ pub use gpui_base::input::CursorBlink;
 /// through the concrete state of their control, never across the public API.
 pub(crate) use gpui_base::input::InputBaseState;
 pub use gpui_base::input::{
-    Backspace, BufferPoint, CodeActionItem, CodeActionProvider, CompletionHighlighter,
-    CompletionMenuOptions, CompletionProvider, Copy, Cut, DefinitionProvider, Delete,
-    DeleteToBeginningOfLine, DeleteToEndOfLine, DeleteToNextWordEnd, DeleteToPreviousWordStart,
-    DisplayMap, DisplayPoint, DocumentColorProvider, DocumentRangeSemanticTokensProvider,
-    EditorState, Enter, Escape, FoldRange, GoToDefinition, GutterDecoration,
-    GutterDecorationCollection, HighlightStyleResolver, HoverPopoverState, HoverProvider, Indent,
-    IndentInline, InputEdit, InputEditsEvent, InputEvent, InputHighlighter,
+    Backspace, BufferPoint, CodeActionItem, CodeActionProvider, CompletionAcceptKeys,
+    CompletionHighlighter, CompletionMenuOptions, CompletionProvider, Copy, Cut,
+    DefinitionProvider, Delete, DeleteToBeginningOfLine, DeleteToEndOfLine, DeleteToNextWordEnd,
+    DeleteToPreviousWordStart, DisplayMap, DisplayPoint, DocumentColorProvider,
+    DocumentRangeSemanticTokensProvider, EditorState, Enter, Escape, FoldRange, GoToDefinition,
+    GutterDecoration, GutterDecorationCollection, HighlightStyleResolver, HoverPopoverState,
+    HoverProvider, Indent, IndentInline, InputEdit, InputEditsEvent, InputEvent, InputHighlighter,
     InputHighlighterFactory, InputState, Lsp, MaskPattern, MoveDown, MoveEnd, MoveHome, MoveLeft,
     MovePageDown, MovePageUp, MoveRight, MoveToEnd, MoveToEndOfLine, MoveToNextWord,
     MoveToPreviousWord, MoveToStart, MoveToStartOfLine, MoveUp, Outdent, OutdentInline,
