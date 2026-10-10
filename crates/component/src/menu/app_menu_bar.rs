@@ -44,8 +44,8 @@ impl AppMenuBar {
                 selected_index: None,
                 action_context: None,
                 popup_focus_handles: Vec::new(),
-                menus: Vec::new(),
                 scroll_handle: ScrollHandle::new(),
+                menus: Vec::new(),
             };
             this.reload(cx);
             this
@@ -422,6 +422,7 @@ mod tests {
                     selected_index: None,
                     action_context: None,
                     popup_focus_handles: Vec::new(),
+                    scroll_handle: ScrollHandle::new(),
                 }),
                 first_focus,
                 second_focus,
@@ -461,6 +462,7 @@ mod tests {
                 selected_index: None,
                 action_context: None,
                 popup_focus_handles: Vec::new(),
+                scroll_handle: ScrollHandle::new(),
             });
             let owned_menu = OwnedMenu {
                 name: "File".into(),
