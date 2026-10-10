@@ -93,18 +93,21 @@ impl ThemeRegistry {
 
     /// Watch themes directory.
     ///
-    /// And reload themes to trigger the `on_load` callback.
+    /// Themes are loaded once now and again whenever a file in the directory
+    /// changes; `on_load` runs after every load, so the host can add its own
+    /// themes back and re-apply the current one.
     #[cfg(not(target_family = "wasm"))]
     pub fn watch_dir<F>(themes_dir: PathBuf, cx: &mut App, on_load: F) -> Result<()>
     where
         F: Fn(&mut App) + 'static,
     {
         Self::global_mut(cx).themes_dir = themes_dir.clone();
+        let on_load: Rc<dyn Fn(&mut App)> = Rc::new(on_load);
 
         // Load theme in the background.
         cx.spawn(async move |cx| {
             _ = cx.update(|cx| {
-                if let Err(err) = Self::_watch_themes_dir(themes_dir, cx) {
+                if let Err(err) = Self::_watch_themes_dir(themes_dir, on_load.clone(), cx) {
                     tracing::error!("Failed to watch themes directory: {}", err);
                 }
 
@@ -183,7 +186,11 @@ impl ThemeRegistry {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    fn _watch_themes_dir(themes_dir: PathBuf, cx: &mut App) -> anyhow::Result<()> {
+    fn _watch_themes_dir(
+        themes_dir: PathBuf,
+        on_load: Rc<dyn Fn(&mut App)>,
+        cx: &mut App,
+    ) -> anyhow::Result<()> {
         use notify::Watcher as _;
 
         if !themes_dir.exists() {
@@ -223,7 +230,10 @@ impl ThemeRegistry {
 
             while rx.recv().await.is_ok() {
                 tracing::info!("Reloading themes...");
-                _ = cx.update(Self::reload_themes);
+                _ = cx.update(|cx| {
+                    Self::reload_themes(cx);
+                    on_load(cx);
+                });
             }
         })
         .detach();
