@@ -26,13 +26,44 @@ pub struct CompletionMenuOptions {
     /// truncate longer labels. Widen this when hosting an editor that
     /// surfaces long completion labels.
     pub max_width: Pixels,
+    /// The keys that accept the highlighted completion.
+    ///
+    /// Defaults to [`CompletionAcceptKeys::Enter`]. A key that does not accept
+    /// keeps its editing meaning and closes the popover: Enter inserts a new
+    /// line, Tab indents.
+    pub accept_keys: CompletionAcceptKeys,
 }
 
 impl Default for CompletionMenuOptions {
     fn default() -> Self {
         Self {
             max_width: px(320.),
+            accept_keys: CompletionAcceptKeys::default(),
         }
+    }
+}
+
+/// The keys that accept the highlighted item of the completion popover.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CompletionAcceptKeys {
+    /// Enter accepts, Tab indents.
+    #[default]
+    Enter,
+    /// Tab accepts, Enter inserts a new line.
+    Tab,
+    /// Both Enter and Tab accept.
+    EnterAndTab,
+}
+
+impl CompletionAcceptKeys {
+    /// Whether Enter accepts the highlighted completion.
+    pub fn is_enter(self) -> bool {
+        matches!(self, Self::Enter | Self::EnterAndTab)
+    }
+
+    /// Whether Tab accepts the highlighted completion.
+    pub fn is_tab(self) -> bool {
+        matches!(self, Self::Tab | Self::EnterAndTab)
     }
 }
 
@@ -264,8 +295,9 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let closes_overlay =
-            crate::input::Enter::is_primary(&*action) || action.partial_eq(&crate::input::Escape);
+        let is_enter = crate::input::Enter::is_primary(&*action);
+        let is_tab = action.partial_eq(&crate::input::IndentInline);
+        let closes_overlay = is_enter || is_tab || action.partial_eq(&crate::input::Escape);
         let kind = if self.extras.context_menu_content.completion.open {
             Some(super::InputOverlayKind::Completion)
         } else if self.extras.context_menu_content.code_action.open {
@@ -273,6 +305,21 @@ impl InputBaseState<EditorMode> {
         } else {
             None
         };
+        if kind == Some(super::InputOverlayKind::Completion) {
+            // A key that does not accept keeps its editing meaning. Enter
+            // still closes the list, so the new line does not leave a stale
+            // suggestion under the caret.
+            let accept_keys = self.extras.lsp.completion_menu.accept_keys;
+            if is_enter && !accept_keys.is_enter() {
+                self.hide_context_menu(cx);
+                return false;
+            }
+            if is_tab && !accept_keys.is_tab() {
+                return false;
+            }
+        } else if is_tab {
+            return false;
+        }
         let Some((kind, handler)) = kind.zip(self.overlay_action_handler.clone()) else {
             return false;
         };
@@ -384,5 +431,114 @@ impl InputBaseState<EditorMode> {
         let completion_text = completion_item.insert_text;
         self.replace_text_in_range_silent(Some(range_utf16), &completion_text, window, cx);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use gpui::{AppContext as _, TestAppContext, px, size};
+
+    use super::CompletionAcceptKeys;
+    use crate::input::{EditorState, Enter, IndentInline, InputOverlayKind};
+
+    const ENTER: Enter = Enter {
+        secondary: false,
+        shift: false,
+    };
+
+    /// Opens an editor holding "ab" with the completion menu open, and returns
+    /// it with a log of the actions its overlay handler was given.
+    fn open_menu(
+        accept_keys: CompletionAcceptKeys,
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::WindowHandle<gpui::EmptyView>,
+        gpui::Entity<EditorState>,
+        Rc<RefCell<Vec<&'static str>>>,
+    ) {
+        cx.update(crate::init);
+        let mut editor = None;
+        let window = cx.open_window(size(px(400.), px(100.)), |window, cx| {
+            editor = Some(cx.new(|cx| EditorState::new(window, cx).default_value("ab")));
+            gpui::EmptyView
+        });
+        let editor = editor.unwrap();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        editor.update(cx, |state, _| {
+            let log = log.clone();
+            state.set_overlay_action_handler(move |kind, action, _, _| {
+                assert_eq!(kind, InputOverlayKind::Completion);
+                let name = if Enter::is_primary(&*action) {
+                    "enter"
+                } else if action.partial_eq(&IndentInline) {
+                    "tab"
+                } else {
+                    return false;
+                };
+                log.borrow_mut().push(name);
+                true
+            });
+            state.extras.lsp.completion_menu.accept_keys = accept_keys;
+            state.extras.context_menu_content.completion.open = true;
+            state.set_cursor_to(2);
+        });
+        (window, editor, log)
+    }
+
+    #[gpui::test]
+    fn test_enter_accepts_by_default(cx: &mut TestAppContext) {
+        let (window, editor, log) = open_menu(CompletionAcceptKeys::default(), cx);
+        window
+            .update(cx, |_, window, cx| {
+                editor.update(cx, |state, cx| {
+                    assert!(state.handle_action_for_context_menu(Box::new(ENTER), window, cx));
+                    assert!(!state.is_context_menu_open(cx));
+
+                    state.extras.context_menu_content.completion.open = true;
+                    state.indent_inline(&IndentInline, window, cx);
+                    assert_ne!(state.value(), "ab", "Tab indents");
+                });
+            })
+            .unwrap();
+        assert_eq!(log.borrow().as_slice(), &["enter"]);
+    }
+
+    #[gpui::test]
+    fn test_tab_accept_leaves_enter_to_the_editor(cx: &mut TestAppContext) {
+        let (window, editor, log) = open_menu(CompletionAcceptKeys::Tab, cx);
+        window
+            .update(cx, |_, window, cx| {
+                editor.update(cx, |state, cx| {
+                    // Enter is not forwarded, and it closes the list so the
+                    // editor's own Enter inserts the new line.
+                    assert!(!state.handle_action_for_context_menu(Box::new(ENTER), window, cx));
+                    assert!(!state.is_context_menu_open(cx));
+
+                    state.extras.context_menu_content.completion.open = true;
+                    state.indent_inline(&IndentInline, window, cx);
+                    assert_eq!(state.value(), "ab", "Tab accepts instead of indenting");
+                    assert!(!state.is_context_menu_open(cx));
+                });
+            })
+            .unwrap();
+        assert_eq!(log.borrow().as_slice(), &["tab"]);
+    }
+
+    #[gpui::test]
+    fn test_enter_and_tab_both_accept(cx: &mut TestAppContext) {
+        let (window, editor, log) = open_menu(CompletionAcceptKeys::EnterAndTab, cx);
+        window
+            .update(cx, |_, window, cx| {
+                editor.update(cx, |state, cx| {
+                    assert!(state.handle_action_for_context_menu(Box::new(ENTER), window, cx));
+                    state.extras.context_menu_content.completion.open = true;
+                    state.indent_inline(&IndentInline, window, cx);
+                    assert_eq!(state.value(), "ab");
+                });
+            })
+            .unwrap();
+        assert_eq!(log.borrow().as_slice(), &["enter", "tab"]);
     }
 }

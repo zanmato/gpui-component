@@ -106,10 +106,10 @@ pub use language::{LanguageProvider, set_language_config, set_language_provider}
 pub(crate) use language_config::LanguageConfig;
 pub use language_config::{AutoClosingPair, BracketPair, IndentationRules};
 pub use lsp::{
-    CodeActionItem, CodeActionMenuState, CodeActionProvider, CompletionMenuOptions,
-    CompletionMenuState, CompletionProvider, DefinitionProvider, DocumentColorProvider,
-    DocumentRangeSemanticTokensProvider, HoverPopoverState, HoverProvider, InputOverlayKind, Lsp,
-    ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState,
+    CodeActionItem, CodeActionMenuState, CodeActionProvider, CompletionAcceptKeys,
+    CompletionMenuOptions, CompletionMenuState, CompletionProvider, DefinitionProvider,
+    DocumentColorProvider, DocumentRangeSemanticTokensProvider, HoverPopoverState, HoverProvider,
+    InputOverlayKind, Lsp, ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState,
 };
 pub use lsp_types::Position;
 pub use mask_pattern::MaskPattern;
