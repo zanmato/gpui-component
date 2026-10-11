@@ -35,6 +35,26 @@ pub trait TableDelegate: Sized + 'static {
     ) {
     }
 
+    /// Whether the rows can be sorted by several columns. When true,
+    /// Shift-clicking a sort icon adds that column as the next sort key and
+    /// [`Self::perform_multi_sort`] is called instead of [`Self::perform_sort`].
+    fn multi_sortable(&self) -> bool {
+        false
+    }
+
+    /// Sort by `keys`, each a column index and its direction, the first key
+    /// sorting first. Empty when the last key was removed.
+    fn perform_multi_sort(
+        &mut self,
+        keys: &[(usize, ColumnSort)],
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) {
+        if let Some(&(col_ix, sort)) = keys.first() {
+            self.perform_sort(col_ix, sort, window, cx);
+        }
+    }
+
     /// Render the table head row.
     fn render_header(
         &mut self,
