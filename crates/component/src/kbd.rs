@@ -125,7 +125,7 @@ impl Kbd {
         let mut parts = vec![];
 
         // The key map order in macOS is: ⌃⌥⇧⌘
-        // And in Windows is: Ctrl+Alt+Shift+Win
+        // And in Windows is: Ctrl+Alt+Shift+Win, where Linux names the last one Super
 
         if key.modifiers.control {
             #[cfg(target_os = "macos")]
@@ -155,8 +155,11 @@ impl Kbd {
             #[cfg(target_os = "macos")]
             parts.push("⌘");
 
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             parts.push("Win");
+
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            parts.push("Super");
         }
 
         let mut keys = String::new();
@@ -176,8 +179,10 @@ impl Kbd {
             "shift" => keys.push_str("Shift"),
             #[cfg(target_os = "macos")]
             "cmd" => keys.push('⌘'),
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             "cmd" => keys.push_str("Win"),
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            "cmd" => keys.push_str("Super"),
             #[cfg(target_os = "macos")]
             "space" => keys.push_str("Space"),
             #[cfg(target_os = "macos")]
@@ -335,7 +340,11 @@ mod tests {
             );
             assert_eq!(
                 Kbd::format(&Keystroke::parse("ctrl-alt-shift-win-a").unwrap()),
-                "Ctrl+Alt+Shift+Win+A"
+                if cfg!(target_os = "windows") {
+                    "Ctrl+Alt+Shift+Win+A"
+                } else {
+                    "Ctrl+Alt+Shift+Super+A"
+                }
             );
             assert_eq!(
                 Kbd::format(&Keystroke::parse("ctrl-shift-backspace").unwrap()),
