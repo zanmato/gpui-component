@@ -128,6 +128,17 @@ pub trait TableDelegate: Sized + 'static {
         menu
     }
 
+    /// Render the context menu for the header of the given column.
+    fn column_context_menu(
+        &mut self,
+        col_ix: usize,
+        menu: PopupMenu,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        menu
+    }
+
     /// Render cell at the given row and column.
     fn render_td(
         &mut self,

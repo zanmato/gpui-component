@@ -135,6 +135,11 @@ pub enum TableEvent {
     /// Use this event to show context menus specific to the cell content.
     /// The right-clicked cell is highlighted with a subtle border until another cell is clicked.
     RightClickedCell(usize, usize),
+    /// A column header has been right-clicked.
+    ///
+    /// Contains the column index. The header's context menu is built by
+    /// [`TableDelegate::column_context_menu`].
+    RightClickedColumn(usize),
     /// The selection has been cleared.
     ///
     /// This event is emitted when the selection is cleared.
@@ -284,6 +289,7 @@ pub struct TableState<D: TableDelegate> {
     selection_mode: SelectionMode,
     right_clicked_row: Option<usize>,
     right_clicked_cell: Option<(usize, usize)>,
+    right_clicked_col: Option<usize>,
     selected_col: Option<usize>,
     selected_cell: Option<(usize, usize)>,
 
@@ -322,6 +328,7 @@ where
             last_selected_row: None,
             right_clicked_row: None,
             right_clicked_cell: None,
+            right_clicked_col: None,
             selected_col: None,
             selected_cell: None,
             resizing_col: None,
@@ -883,6 +890,7 @@ where
     ) {
         self.right_clicked_row = row_ix;
         self.right_clicked_cell = None;
+        self.right_clicked_col = None;
         cx.emit(TableEvent::RightClickedRow(row_ix));
     }
 
@@ -901,7 +909,24 @@ where
         cx.stop_propagation();
         self.right_clicked_cell = Some((row_ix, col_ix));
         self.right_clicked_row = None;
+        self.right_clicked_col = None;
         cx.emit(TableEvent::RightClickedCell(row_ix, col_ix));
+    }
+
+    /// The column whose menu opens is selected first, as a click would, so
+    /// the menu visibly belongs to it.
+    fn on_col_head_right_click(
+        &mut self,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.right_clicked_col = Some(col_ix);
+        self.right_clicked_cell = None;
+        self.right_clicked_row = None;
+        self.on_col_head_click(col_ix, window, cx);
+        cx.emit(TableEvent::RightClickedColumn(col_ix));
+        cx.notify();
     }
 
     fn on_row_left_click(
@@ -1913,6 +1938,12 @@ where
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.on_col_head_click(col_ix, window, cx);
                     }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, window, cx| {
+                            this.on_col_head_right_click(col_ix, window, cx);
+                        }),
+                    )
                     .child(
                         h_flex()
                             .size_full()
@@ -2755,8 +2786,17 @@ where
             .context_menu({
                 let view = cx.entity().clone();
                 move |this, window: &mut Window, cx: &mut Context<PopupMenu>| {
-                    let right_clicked_cell = view.read(cx).right_clicked_cell;
-                    if let Some(cell) = right_clicked_cell {
+                    let (right_clicked_col, right_clicked_cell) = {
+                        let table = view.read(cx);
+                        (table.right_clicked_col, table.right_clicked_cell)
+                    };
+                    if let Some(col_ix) = right_clicked_col {
+                        view.update(cx, |table, cx| {
+                            table
+                                .delegate_mut()
+                                .column_context_menu(col_ix, this, window, cx)
+                        })
+                    } else if let Some(cell) = right_clicked_cell {
                         view.update(cx, |menu, cx| {
                             menu.delegate_mut().context_menu(cell, this, window, cx)
                         })
@@ -3022,5 +3062,29 @@ mod tests {
             })
             .unwrap();
         assert_eq!(calls.borrow().len(), 2);
+    }
+
+    #[gpui::test]
+    fn right_click_on_a_header_selects_its_column(cx: &mut TestAppContext) {
+        let (window, _) = table(false, cx);
+        window
+            .update(cx, |table, window, cx| {
+                table.cell_selectable = true;
+                table.on_col_head_right_click(1, window, cx);
+                assert_eq!(table.right_clicked_col, Some(1));
+                assert_eq!(table.selection(), TableSelection::Column(1));
+
+                // The menu follows the last press, so a cell takes it back.
+                table.on_cell_right_click(&MouseDownEvent::default(), 0, 2, window, cx);
+                assert_eq!(table.right_clicked_col, None);
+                assert_eq!(table.right_clicked_cell, Some((0, 2)));
+
+                table.col_selectable = false;
+                table.clear_selection(cx);
+                table.on_col_head_right_click(2, window, cx);
+                assert_eq!(table.right_clicked_col, Some(2));
+                assert_eq!(table.selection(), TableSelection::None);
+            })
+            .unwrap();
     }
 }
