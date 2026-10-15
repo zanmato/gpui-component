@@ -2052,6 +2052,26 @@ impl<M: InputModeKind> TextElement<M> {
         window: &mut Window,
     ) -> Vec<LineLayout> {
         let is_single_line = state.is_single_line();
+        // Markers are only looked for in the columns on screen, padded by a
+        // screen's width each side for scrolling that settles after layout.
+        // A long unwrapped line would otherwise be walked end to end on every
+        // frame for marks nobody can see.
+        let visible_x = {
+            let width = (last_layout.content_width - last_layout.line_number_width).max(px(1.));
+            let left = (-state.scroll_handle.offset().x).max(px(0.));
+            (left - width).max(px(0.))..left + width * 2.
+        };
+        let invisible_color = state
+            .highlight_invisible_characters
+            .then_some(state.editor_style.diagnostics.warning)
+            // Unset diagnostic colors are transparent; fall back to ink.
+            .map(|color| {
+                if color.a == 0. {
+                    state.editor_style.foreground
+                } else {
+                    color
+                }
+            });
         if state.tokens_visible() {
             return Self::layout_token_lines(state, last_layout, font_size, runs, window);
         }
@@ -2067,7 +2087,7 @@ impl<M: InputModeKind> TextElement<M> {
             let line_layout = LineLayout::new()
                 .lines(smallvec::smallvec![shaped_line])
                 .with_background(has_background(line_runs))
-                .with_whitespaces(whitespace_indicators);
+                .with_markers(whitespace_indicators, invisible_color, &visible_x);
             return vec![line_layout];
         }
 
@@ -2092,7 +2112,7 @@ impl<M: InputModeKind> TextElement<M> {
             let line_layout = LineLayout::new()
                 .lines(placeholder_lines)
                 .with_background(line_has_background)
-                .with_whitespaces(whitespace_indicators);
+                .with_markers(whitespace_indicators, invisible_color, &visible_x);
             return vec![line_layout];
         }
 
@@ -2153,7 +2173,7 @@ impl<M: InputModeKind> TextElement<M> {
                 .lines(wrapped_lines)
                 .wrap_indent(wrap_indent)
                 .with_background(line_has_background)
-                .with_whitespaces(whitespace_indicators.clone());
+                .with_markers(whitespace_indicators.clone(), invisible_color, &visible_x);
             lines.push(line_layout);
 
             // +1 for the `\n`

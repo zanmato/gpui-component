@@ -5,7 +5,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Font, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px, size,
+    App, BorderStyle, Bounds, Font, Hsla, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign,
+    Window, point, px, quad, size,
 };
 use ropey::Rope;
 use smallvec::SmallVec;
@@ -13,7 +14,7 @@ use sum_tree::{Bias, Dimensions, SumTree};
 use unicode_segmentation::UnicodeSegmentation as _;
 
 use crate::input::{
-    Point as TreeSitterPoint, RopeExt,
+    Point as TreeSitterPoint, RopeExt, invisible_character,
     layout::{LastLayout, WhitespaceIndicators},
 };
 
@@ -755,6 +756,10 @@ pub(crate) struct LineLayout {
     pub(crate) whitespace_indicators: Option<WhitespaceIndicators>,
     /// Whitespace indicators: (line_index, x_position, is_tab)
     pub(crate) whitespace_chars: Vec<(usize, Pixels, bool)>,
+    /// The color invisible characters are boxed in, when they are.
+    invisible_color: Option<Hsla>,
+    /// Invisible characters: (line_index, start_x, end_x)
+    invisible_chars: Vec<(usize, Pixels, Pixels)>,
     /// Whether any run of this line carries a background color, so [`Self::paint_background`]
     /// can skip the glyph walk for the common case of a line without highlights.
     has_background: bool,
@@ -769,6 +774,8 @@ impl LineLayout {
             wrap_indent: px(0.),
             whitespace_chars: Vec::new(),
             whitespace_indicators: None,
+            invisible_color: None,
+            invisible_chars: Vec::new(),
             has_background: false,
         }
     }
@@ -823,28 +830,61 @@ impl LineLayout {
         self
     }
 
-    pub(crate) fn with_whitespaces(mut self, indicators: Option<WhitespaceIndicators>) -> Self {
+    /// Find the spaces and tabs to draw `indicators` on and, with
+    /// `invisible_color`, the invisible characters to box, among the
+    /// characters within `visible_x`.
+    pub(crate) fn with_markers(
+        mut self,
+        indicators: Option<WhitespaceIndicators>,
+        invisible_color: Option<Hsla>,
+        visible_x: &Range<Pixels>,
+    ) -> Self {
         self.whitespace_indicators = indicators;
-        let Some(indicators) = self.whitespace_indicators.as_ref() else {
-            return self;
+        self.invisible_color = invisible_color;
+        let space_indicator_offset = match self.whitespace_indicators.as_ref() {
+            Some(indicators) => Some(indicators.space.width.half()),
+            None if invisible_color.is_none() => return self,
+            None => None,
         };
-
-        let space_indicator_offset = indicators.space.width.half();
+        let boxes_invisible = invisible_color.is_some();
 
         for (line_index, wrapped_line) in self.wrapped_lines.iter().enumerate() {
-            for (relative_offset, c) in wrapped_line.text.char_indices() {
-                if matches!(c, ' ' | '\t') {
-                    let is_tab = c == '\t';
-                    let start_x = wrapped_line.x_for_index(relative_offset);
-                    let end_x = wrapped_line.x_for_index(relative_offset + c.len_utf8());
-                    // Center the indicator in the actual character's space
-                    let x_position = if c == ' ' {
-                        (start_x + end_x).half() - space_indicator_offset
-                    } else {
-                        start_x
-                    };
+            let visible = wrapped_line.byte_range_for_x(visible_x);
+            let Some(visible_text) = wrapped_line.text.get(visible.clone()) else {
+                continue;
+            };
+            let marked: Vec<(usize, char)> = visible_text
+                .char_indices()
+                .map(|(offset, c)| (visible.start + offset, c))
+                .filter(|&(_, c)| {
+                    (space_indicator_offset.is_some() && matches!(c, ' ' | '\t'))
+                        || (boxes_invisible && invisible_character(c).is_some())
+                })
+                .collect();
+            if marked.is_empty() {
+                continue;
+            }
+            // Each character's start and end, in one walk over the row.
+            let offsets: Vec<usize> = marked
+                .iter()
+                .flat_map(|&(offset, c)| [offset, offset + c.len_utf8()])
+                .collect();
+            let xs = wrapped_line.xs_for_sorted_indices(&offsets);
+            for (&(_, c), x) in marked.iter().zip(xs.chunks_exact(2)) {
+                let (start_x, end_x) = (x[0], x[1]);
+                match space_indicator_offset {
+                    Some(space_indicator_offset) if matches!(c, ' ' | '\t') => {
+                        let is_tab = c == '\t';
+                        // Center the indicator in the actual character's space
+                        let x_position = if c == ' ' {
+                            (start_x + end_x).half() - space_indicator_offset
+                        } else {
+                            start_x
+                        };
 
-                    self.whitespace_chars.push((line_index, x_position, is_tab));
+                        self.whitespace_chars.push((line_index, x_position, is_tab));
+                    }
+                    _ => self.invisible_chars.push((line_index, start_x, end_x)),
                 }
             }
         }
@@ -1093,6 +1133,38 @@ impl LineLayout {
                 _ = invisible.paint(origin, line_height, text_align, align_width, window, cx);
             }
         }
+
+        // Box invisible characters, as VS Code's Unicode highlighting does.
+        // A character without width gets a box about half a character wide,
+        // centered where it sits. It is only painted over its neighbours, so
+        // the line's layout and wrapping stay as they are.
+        if let Some(color) = self.invisible_color {
+            let min_width = line_height * 0.4;
+            let inset = px(1.);
+            for (line_index, start_x, end_x) in &self.invisible_chars {
+                let width = *end_x - *start_x;
+                let (x, width) = if width < min_width {
+                    (*start_x + width.half() - min_width.half(), min_width)
+                } else {
+                    (*start_x, width)
+                };
+                let bounds = Bounds::new(
+                    point(
+                        pos.x + x + self.line_indent(*line_index),
+                        pos.y + *line_index as f32 * line_height + inset,
+                    ),
+                    size(width, line_height - inset * 2.),
+                );
+                window.paint_quad(quad(
+                    bounds,
+                    px(2.),
+                    color.opacity(0.2),
+                    px(1.),
+                    color,
+                    BorderStyle::Solid,
+                ));
+            }
+        }
     }
 }
 
@@ -1135,6 +1207,50 @@ mod tests {
             None,
             platform.text_system(),
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn invisible_characters_are_found_only_when_boxed() {
+        let cx = shaping_test_context();
+        cx.update(|cx| {
+            let text = "a\u{00A0}b\u{200B}c d";
+            let shaped = gpui::WindowTextSystem::new(cx.text_system().clone()).shape_line(
+                text.into(),
+                px(14.),
+                &[gpui::TextRun {
+                    len: text.len(),
+                    font: test_font(),
+                    color: gpui::black(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            let plain = LineLayout::new()
+                .lines(smallvec::smallvec![shaped.clone()])
+                .with_markers(None, None, &(px(0.)..px(10_000.)));
+            assert!(plain.invisible_chars.is_empty());
+
+            let boxed = LineLayout::new()
+                .lines(smallvec::smallvec![shaped])
+                .with_markers(None, Some(gpui::red()), &(px(0.)..px(10_000.)));
+            // The no-break space has a width, the zero width space none, and
+            // the plain space is not invisible.
+            assert_eq!(boxed.invisible_chars.len(), 2);
+            let (_, start, end) = boxed.invisible_chars[0];
+            assert!(end > start);
+            let (_, start, end) = boxed.invisible_chars[1];
+            assert_eq!(end, start);
+
+            // The single walk answers like `x_for_index` at every offset,
+            // and past the end with the row's width.
+            let row = &boxed.wrapped_lines[0];
+            let offsets: Vec<usize> = (0..=text.len() + 2).collect();
+            let expected: Vec<Pixels> = offsets.iter().map(|&ix| row.x_for_index(ix)).collect();
+            assert_eq!(row.xs_for_sorted_indices(&offsets), expected);
+        });
     }
 
     #[cfg(target_os = "linux")]

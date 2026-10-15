@@ -43,6 +43,8 @@ pub use token_presentation::{
     InlineTokenClickEvent, InlineTokenClickListener, InlineTokenContext, InlineTokenHoverEvent,
     InlineTokenHoverListener, InlineTokenRenderer,
 };
+#[path = "editor/invisible.rs"]
+mod invisible;
 #[path = "base/kind.rs"]
 mod kind;
 #[path = "editor/language.rs"]
@@ -98,6 +100,7 @@ pub use highlighting::{
 };
 pub use indent::TabSize;
 pub use input::{Input, InputState};
+pub use invisible::{InvisibleCharacter, invisible_character};
 pub use kind::{
     EditorExtras, EditorMode, InputExtras, InputMode, InputModeKind, MultiLineMode, TextareaMode,
 };
