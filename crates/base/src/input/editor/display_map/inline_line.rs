@@ -42,6 +42,68 @@ impl InputLine {
             content: Content::Inline(fragments),
         }
     }
+    /// The bytes whose glyphs lie within `x`, found by binary search over
+    /// the glyph positions, which shaping leaves in visual order. Rows of
+    /// inline tokens, and a range that bidirectional text turns around,
+    /// give the whole row.
+    pub(crate) fn byte_range_for_x(&self, x: &Range<Pixels>) -> Range<usize> {
+        let Content::Text(line) = &self.content else {
+            return 0..self.len;
+        };
+        // The byte index of the first glyph at or right of `target`.
+        let index_at = |target: Pixels| {
+            let run = line.runs.partition_point(|run| {
+                run.glyphs
+                    .last()
+                    .is_some_and(|glyph| glyph.position.x < target)
+            });
+            line.runs
+                .get(run)
+                .and_then(|run| {
+                    let glyph = run
+                        .glyphs
+                        .partition_point(|glyph| glyph.position.x < target);
+                    run.glyphs.get(glyph).map(|glyph| glyph.index)
+                })
+                .unwrap_or(self.len)
+        };
+        let range = index_at(x.start)..index_at(x.end);
+        if range.start > range.end {
+            0..self.len
+        } else {
+            range
+        }
+    }
+
+    /// [`Self::x_for_index`] for each of `indices`, which must not decrease,
+    /// in one walk over the glyphs that stops at the last index.
+    /// `x_for_index` walks the glyphs from the start of the row on every
+    /// call, so asking it for every marked character of a long row is
+    /// quadratic.
+    pub(crate) fn xs_for_sorted_indices(&self, indices: &[usize]) -> Vec<Pixels> {
+        let Content::Text(line) = &self.content else {
+            // Rows of inline tokens are short; they keep the plain walk.
+            return indices.iter().map(|&ix| self.x_for_index(ix)).collect();
+        };
+        // `x_for_index` gives the first glyph, in shaped order, whose index is
+        // at least `ix`: the first glyph whose running maximum index reaches
+        // `ix`. The running maximum never decreases, so ascending indices are
+        // answered in order as the walk goes.
+        let mut xs = Vec::with_capacity(indices.len());
+        let mut pending = indices.iter().peekable();
+        let mut max_index = 0;
+        for glyph in line.runs.iter().flat_map(|run| &run.glyphs) {
+            max_index = max_index.max(glyph.index);
+            while pending.next_if(|&&ix| ix <= max_index).is_some() {
+                xs.push(glyph.position.x);
+            }
+            if pending.peek().is_none() {
+                return xs;
+            }
+        }
+        xs.extend(pending.map(|_| line.width));
+        xs
+    }
     pub(crate) fn x_for_index(&self, ix: usize) -> Pixels {
         match &self.content {
             Content::Text(line) => line.x_for_index(ix),

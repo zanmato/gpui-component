@@ -533,6 +533,9 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) autocorrect: Option<bool>,
     pub(super) autocapitalize: Option<Autocapitalize>,
     pub(super) show_whitespaces: bool,
+    /// Box characters that would otherwise draw as nothing or as a plain
+    /// space, as [`super::super::invisible_character`] defines them.
+    pub(super) highlight_invisible_characters: bool,
     /// This flag tells the renderer to prefer the end of the current visual line.
     pub(crate) cursor_line_end_affinity: bool,
     pub(super) pattern: Option<regex::Regex>,
@@ -1031,6 +1034,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             autocorrect: None,
             autocapitalize: None,
             show_whitespaces: false,
+            highlight_invisible_characters: false,
             loading: false,
             pattern: None,
             validate: None,
@@ -1569,6 +1573,26 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// Update whether to show whitespace characters.
     pub fn set_show_whitespaces(&mut self, show: bool, _: &mut Window, cx: &mut Context<Self>) {
         self.show_whitespaces = show;
+        cx.notify();
+    }
+
+    /// Set whether to box invisible characters: control characters, zero
+    /// width characters and Unicode spaces, which otherwise look like nothing
+    /// or like a plain space. Separate from [`Self::show_whitespaces`], as
+    /// VS Code keeps its Unicode highlighting apart from rendered whitespace.
+    pub fn highlight_invisible_characters(mut self, highlight: bool) -> Self {
+        self.highlight_invisible_characters = highlight;
+        self
+    }
+
+    /// Update whether to box invisible characters.
+    pub fn set_highlight_invisible_characters(
+        &mut self,
+        highlight: bool,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.highlight_invisible_characters = highlight;
         cx.notify();
     }
 
