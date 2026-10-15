@@ -45,6 +45,8 @@ pub use token_presentation::{
 };
 #[path = "base/a11y_text.rs"]
 pub(crate) mod a11y_text;
+#[path = "editor/invisible.rs"]
+mod invisible;
 #[path = "base/kind.rs"]
 mod kind;
 #[path = "editor/language.rs"]
@@ -109,6 +111,7 @@ pub use highlighting::{
 };
 pub use indent::TabSize;
 pub use input::{Input, InputState};
+pub use invisible::{InvisibleCharacter, invisible_character};
 pub use kind::{
     EditorExtras, EditorMode, InputExtras, InputMode, InputModeKind, MultiLineMode, TextareaExtras,
     TextareaMode,
