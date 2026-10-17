@@ -5,8 +5,8 @@ use std::{rc::Rc, sync::LazyLock, time::Duration};
 use gpui::{
     Action, Anchor, Animation, AnimationExt as _, AnyElement, App, BoxShadow, ClickEvent, Edges,
     FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
-    prelude::FluentBuilder, px,
+    SharedString, Size, StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla,
+    point, prelude::FluentBuilder, px,
 };
 use gpui_base::{ElementExt as _, TextSelectionScopeId};
 use rust_i18n::t;
@@ -282,6 +282,21 @@ impl BaseDialogRoot {
     }
     fn request_close(self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         map_base_root!(self, request_close(handler))
+    }
+    /// Lays the host, and the backdrop that fills it, over the window's
+    /// content. The base host covers the whole viewport, which with
+    /// client-side decorations includes the shadow around the frame.
+    fn frame(self, insets: Edges<Pixels>, viewport: Size<Pixels>) -> Self {
+        let width = viewport.width - insets.left - insets.right;
+        let height = viewport.height - insets.top - insets.bottom;
+        match self {
+            Self::Dialog(root) => {
+                Self::Dialog(root.top(insets.top).left(insets.left).w(width).h(height))
+            }
+            Self::AlertDialog(root) => {
+                Self::AlertDialog(root.top(insets.top).left(insets.left).w(width).h(height))
+            }
+        }
     }
 }
 
@@ -563,6 +578,7 @@ impl RenderOnce for Dialog {
         let on_cancel = self.button_props.cancel_handler();
 
         let window_paddings = crate::window_border::window_paddings(window);
+        let content_insets = crate::window_border::window_content_insets(window);
         let view_size = window.viewport_size()
             - gpui::size(
                 window_paddings.left + window_paddings.right,
@@ -630,6 +646,7 @@ impl RenderOnce for Dialog {
                                 (self.layer_ix + 1)
                                     == WindowState::read(window, cx).active_dialogs.len(),
                             )
+                            .frame(content_insets, window.viewport_size())
                             .focus_handle(self.focus_handle.clone())
                             .close_on_escape(self.props.keyboard)
                             .close_on_backdrop_press(self.props.overlay_closable)
