@@ -5,7 +5,7 @@ use std::{rc::Rc, sync::LazyLock, time::Duration};
 
 use gpui::{
     Action, Anchor, AnyElement, App, BoxShadow, ClickEvent, Edges, FocusHandle, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
+    InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, SharedString, Size,
     StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
     prelude::FluentBuilder, px,
 };
@@ -287,6 +287,21 @@ impl BaseDialogRoot {
     }
     fn request_close(self, handler: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
         map_base_root!(self, request_close(handler))
+    }
+    /// Lays the host, and the backdrop that fills it, over the window's
+    /// content. The base host covers the whole viewport, which with
+    /// client-side decorations includes the shadow around the frame.
+    fn frame(self, insets: Edges<Pixels>, viewport: Size<Pixels>) -> Self {
+        let width = viewport.width - insets.left - insets.right;
+        let height = viewport.height - insets.top - insets.bottom;
+        match self {
+            Self::Dialog(root) => {
+                Self::Dialog(root.top(insets.top).left(insets.left).w(width).h(height))
+            }
+            Self::AlertDialog(root) => {
+                Self::AlertDialog(root.top(insets.top).left(insets.left).w(width).h(height))
+            }
+        }
     }
 }
 
@@ -654,6 +669,7 @@ impl RenderOnce for Dialog {
         let on_cancel = self.button_props.cancel_handler();
 
         let window_paddings = crate::window_border::window_paddings(window);
+        let content_insets = crate::window_border::window_content_insets(window);
         let view_size = window.viewport_size()
             - gpui::size(
                 window_paddings.left + window_paddings.right,
@@ -733,6 +749,7 @@ impl RenderOnce for Dialog {
                             .take()
                             .expect("Dialog base host is always present")
                             .layer(self.id, is_topmost)
+                            .frame(content_insets, window.viewport_size())
                             .focus_handle(self.focus_handle.clone())
                             .close_on_escape(self.props.keyboard && !closing)
                             .close_on_backdrop_press(self.props.overlay_closable && !closing)
