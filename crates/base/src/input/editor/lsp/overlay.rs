@@ -10,6 +10,10 @@ pub struct CompletionMenuState {
     pub trigger_start_offset: Option<usize>,
     pub query: String,
     pub items: Vec<CompletionItem>,
+    /// The menu was open when an edit closed it. Typing that continues the
+    /// same word opens it again at once, so the list does not blink while
+    /// the provider answers.
+    pub(crate) open_before_edit: bool,
     revision: u64,
 }
 
