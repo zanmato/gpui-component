@@ -139,6 +139,13 @@ impl InputModeKind for EditorMode {
         state.hide_context_menu(cx);
     }
 
+    fn hide_context_menu_for_edit(
+        state: &mut InputBaseState<Self>,
+        cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
+        state.hide_context_menu_for_edit(cx);
+    }
+
     fn is_context_menu_open(state: &InputBaseState<Self>, cx: &App) -> bool {
         state.is_context_menu_open(cx)
     }
