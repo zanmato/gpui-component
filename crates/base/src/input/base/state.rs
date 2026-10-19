@@ -3799,7 +3799,7 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         // Every edit invalidates provider responses for the previous document,
         // including deletion and indentation which do not trigger completion.
-        M::hide_context_menu(self, cx);
+        M::hide_context_menu_for_edit(self, cx);
         M::clear_inline_completion(self, cx);
 
         // Sort descending by start so applying front-of-vec first edits the
@@ -4780,6 +4780,67 @@ mod tests {
                     assert_eq!(state.value(), "中a中a");
                     assert_eq!(provider.starts.borrow().as_slice(), &[4]);
                     assert_eq!(provider.queries.borrow().as_slice(), &[(7, "中".into())]);
+                });
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_typing_keeps_open_completion_menu_until_response(cx: &mut TestAppContext) {
+        use crate::input::{CompletionProvider, EditorState};
+        use gpui::Task;
+        use lsp_types::{CompletionContext, CompletionItem, CompletionResponse};
+
+        struct Provider;
+
+        impl CompletionProvider for Provider {
+            fn is_completion_trigger(&self, _: usize, new_text: &str, _: &mut App) -> bool {
+                !new_text.is_empty()
+            }
+
+            fn completions(
+                &self,
+                _: &Rope,
+                _: usize,
+                _: CompletionContext,
+                _: &mut Window,
+                _: &mut App,
+            ) -> Task<anyhow::Result<CompletionResponse>> {
+                Task::ready(Ok(CompletionResponse::Array(vec![])))
+            }
+        }
+
+        let item = |label: &str| CompletionItem {
+            label: label.into(),
+            ..Default::default()
+        };
+
+        cx.update(crate::init);
+        let mut editor = None;
+        let window = cx.open_window(size(px(400.), px(100.)), |window, cx| {
+            editor = Some(cx.new(|cx| EditorState::new(window, cx).default_value("s")));
+            gpui::EmptyView
+        });
+        let editor = editor.unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                editor.update(cx, |state, cx| {
+                    state.extras.lsp.completion_provider = Some(Rc::new(Provider));
+                    state.set_cursor_to(1);
+                    state.present_completion_items(0, "s", vec![item("select")], cx);
+
+                    // The response for "se" has not arrived yet, but the menu
+                    // stays up with the previous items and the new query.
+                    state.replace_text_in_range(None, "e", window, cx);
+                    let menu = &state.extras.context_menu_content.completion;
+                    assert!(menu.open, "typing closed the menu before the response");
+                    assert_eq!(menu.query, "se");
+                    assert_eq!(menu.items.len(), 1);
+
+                    // A dismissed menu waits for the provider before it opens.
+                    state.hide_context_menu(cx);
+                    state.replace_text_in_range(None, "l", window, cx);
+                    assert!(!state.extras.context_menu_content.completion.open);
                 });
             })
             .unwrap();

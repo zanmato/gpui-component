@@ -292,6 +292,16 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
     ) {
     }
 
+    /// Closes the menus because the text changed. Unlike
+    /// [`Self::hide_context_menu`], a completion menu that the typed text
+    /// continues may stay on screen until the new response arrives.
+    fn hide_context_menu_for_edit(
+        state: &mut InputBaseState<Self>,
+        cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) {
+        Self::hide_context_menu(state, cx);
+    }
+
     /// Whether a completion or code-action menu is currently open.
     fn is_context_menu_open(_state: &InputBaseState<Self>, _cx: &gpui::App) -> bool {
         false

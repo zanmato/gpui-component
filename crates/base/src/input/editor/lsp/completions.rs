@@ -157,6 +157,13 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let reopen = std::mem::take(
+            &mut self
+                .extras
+                .context_menu_content
+                .completion
+                .open_before_edit,
+        );
         if self.completion_inserting {
             return;
         }
@@ -223,6 +230,13 @@ impl InputBaseState<EditorMode> {
             .completion
             .query
             .clone_from(&query);
+        // Keep showing the previous items, re-highlighted for the new query,
+        // until the response replaces them. Closing here and opening again
+        // when the response arrives makes the menu blink on every keystroke.
+        if reopen && latched.is_some() {
+            self.extras.context_menu_content.completion.open = true;
+            self.extras.context_menu_content.completion.bump();
+        }
 
         let completion_context = CompletionContext {
             trigger_kind: lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
@@ -279,9 +293,18 @@ impl InputBaseState<EditorMode> {
 
     pub(crate) fn hide_context_menu(&mut self, cx: &mut Context<Self>) {
         self.extras.context_menu_content.completion.open = false;
+        self.extras.context_menu_content.completion.open_before_edit = false;
         self.extras.context_menu_content.code_action.open = false;
         self.extras.context_menu_task = Task::ready(Ok(()));
         cx.notify();
+    }
+
+    /// Closes the menus for an edit, remembering whether completion was open
+    /// so the typed text can keep it on screen.
+    pub(crate) fn hide_context_menu_for_edit(&mut self, cx: &mut Context<Self>) {
+        let was_open = self.extras.context_menu_content.completion.open;
+        self.hide_context_menu(cx);
+        self.extras.context_menu_content.completion.open_before_edit = was_open;
     }
 
     pub(crate) fn is_context_menu_open(&self, _cx: &gpui::App) -> bool {
