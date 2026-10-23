@@ -3588,9 +3588,20 @@ fn paint_text_selection(state: &Entity<WindowSelectionState>, window: &mut Windo
 
     let mouse_move_state = state.downgrade();
     window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+        // The button is up, so the press ended where the window could not
+        // see it: the compositor keeps the release of a press that starts a
+        // window resize. Left open, the gesture would follow the pointer and
+        // select whatever it passes, and the next press would skip its
+        // preparation. A long press drives its gesture with touch events,
+        // which hold no button.
         if phase.capture() && event.pressed_button != Some(MouseButton::Left) {
-            if let Some(state) = mouse_move_state.upgrade() {
-                state.update(cx, |state, cx| state.end(cx));
+            if let Some(state) = mouse_move_state.upgrade()
+                && !window.has_long_press_capture(&state)
+            {
+                state.update(cx, |state, cx| {
+                    state.mouse_down_prepared = false;
+                    state.end(cx)
+                });
             }
             return;
         }
@@ -5992,6 +6003,33 @@ mod tests {
             let snapshot = view.read(cx).selection.snapshot(cx).unwrap();
             assert!(!snapshot.is_selecting());
             assert_eq!((snapshot.anchor(), snapshot.cursor()), selected);
+        });
+    }
+
+    #[gpui::test]
+    fn a_move_with_the_button_up_ends_a_gesture_whose_release_was_lost(cx: &mut TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| ClickStoppingChildView {
+            selection: TextSelectionHandle::new("participant", cx),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+
+        // A press whose release never reaches the window, as when it starts a
+        // window resize and the compositor keeps the release.
+        cx.simulate_mouse_down(
+            point(px(10.), px(10.)),
+            MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+
+        // The pointer then travels over the text with no button held.
+        cx.simulate_mouse_move(point(px(50.), px(50.)), None, gpui::Modifiers::default());
+        cx.update(|window, cx| {
+            let state = WindowSelectionState::ensure(window, cx);
+            assert!(!state.read(cx).is_selecting());
+            assert!(!state.read(cx).mouse_down_prepared);
+            assert!(view.read(cx).selection.snapshot(cx).is_none());
         });
     }
 
