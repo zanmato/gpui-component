@@ -263,13 +263,8 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let reopen = std::mem::take(
-            &mut self
-                .extras
-                .context_menu_content
-                .completion
-                .open_before_edit,
-        );
+        let reopen =
+            std::mem::take(&mut self.extras.context_menu_content.completion.open_before_edit);
         if self.completion_inserting {
             return;
         }
