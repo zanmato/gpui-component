@@ -73,6 +73,22 @@ pub struct NativeMenu {
     items: Vec<NativeMenuItem>,
 }
 
+/// The input engine's context menu entries, shown as they are.
+impl From<gpui_base::input::NativeMenu> for NativeMenu {
+    fn from(menu: gpui_base::input::NativeMenu) -> Self {
+        menu.items
+            .into_iter()
+            .fold(Self::new(), |this, item| match item {
+                gpui_base::input::NativeMenuItem::Separator => this.separator(),
+                gpui_base::input::NativeMenuItem::Action {
+                    label,
+                    disabled,
+                    action,
+                } => this.menu_with_disabled(label, disabled, action),
+            })
+    }
+}
+
 impl NativeMenu {
     /// Create an empty native menu.
     pub fn new() -> Self {
