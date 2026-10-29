@@ -94,7 +94,61 @@ fn compose_decorations(
 
     // Decorations are application-authored overrides and must win over syntax
     // and semantic highlighting when both set the same style property.
-    Some(gpui::combine_highlights(styles, visible_decorations).collect())
+    Some(overlay_highlights(styles, visible_decorations.collect()))
+}
+
+/// Lay `overrides` over the ordered, non-overlapping runs of `base`. Where
+/// they overlap, a property an override sets replaces the base's, and of
+/// overlapping overrides the later one wins.
+///
+/// `gpui::combine_highlights` cannot do this: it folds the styles active at a
+/// position in the iteration order of a hash set, so which of two colors
+/// wins depends on how their indices hash.
+fn overlay_highlights(
+    base: Vec<(Range<usize>, HighlightStyle)>,
+    overrides: Vec<(Range<usize>, HighlightStyle)>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    let mut boundaries: Vec<usize> = base
+        .iter()
+        .chain(&overrides)
+        .flat_map(|(range, _)| [range.start, range.end])
+        .collect();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut by_start: Vec<usize> = (0..overrides.len()).collect();
+    by_start.sort_by_key(|&ix| overrides[ix].0.start);
+    let mut by_start = by_start.into_iter().peekable();
+    let mut active: Vec<usize> = Vec::new();
+    let mut base_runs = base.iter().peekable();
+    let mut result = Vec::with_capacity(base.len() + overrides.len() * 2);
+
+    for window in boundaries.windows(2) {
+        let (start, end) = (window[0], window[1]);
+        while base_runs.next_if(|(range, _)| range.end <= start).is_some() {}
+        let base_style = base_runs
+            .peek()
+            .filter(|(range, _)| range.start <= start)
+            .map(|(_, style)| *style);
+
+        active.retain(|&ix| overrides[ix].0.end > start);
+        while let Some(ix) = by_start.next_if(|&ix| overrides[ix].0.start <= start) {
+            if overrides[ix].0.end > start {
+                active.push(ix);
+            }
+        }
+        if base_style.is_none() && active.is_empty() {
+            continue;
+        }
+        active.sort_unstable();
+        let style = active
+            .iter()
+            .fold(base_style.unwrap_or_default(), |style, &ix| {
+                style.highlight(overrides[ix].1)
+            });
+        result.push((start..end, style));
+    }
+    result
 }
 
 fn compose_decoration_collections<'a>(
@@ -4589,6 +4643,87 @@ mod tests {
         assert_eq!(styles[1].0, 2..6);
         assert_eq!(styles[1].1.color, Some(gpui::red()));
         assert_eq!(styles[1].1.font_style, Some(gpui::FontStyle::Italic));
+    }
+
+    #[test]
+    fn test_decorations_win_over_every_syntax_run() {
+        // One syntax run per byte and a decoration on every other one: with
+        // this many styles active at once, any order other than the layers'
+        // own would let the syntax color through somewhere.
+        let syntax: Vec<_> = (0..64)
+            .map(|ix| {
+                (
+                    ix..ix + 1,
+                    HighlightStyle {
+                        color: Some(gpui::blue()),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        let decorations: Vec<_> = (0..64)
+            .step_by(2)
+            .map(|ix| {
+                (
+                    ix..ix + 1,
+                    HighlightStyle {
+                        color: Some(gpui::red()),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+
+        let styles = compose_decorations(syntax, decorations, 0..64).unwrap();
+
+        assert_eq!(styles.len(), 64);
+        for (range, style) in styles {
+            let expected = if range.start % 2 == 0 {
+                gpui::red()
+            } else {
+                gpui::blue()
+            };
+            assert_eq!(style.color, Some(expected), "at {range:?}");
+        }
+    }
+
+    #[test]
+    fn test_overlapping_decorations_keep_their_order_and_the_gaps() {
+        let syntax = vec![(
+            0..10,
+            HighlightStyle {
+                font_weight: Some(gpui::FontWeight::BOLD),
+                ..Default::default()
+            },
+        )];
+        let first = HighlightStyle {
+            color: Some(gpui::red()),
+            ..Default::default()
+        };
+        let second = HighlightStyle {
+            color: Some(gpui::green()),
+            ..Default::default()
+        };
+
+        let styles =
+            overlay_highlights(syntax, vec![(2..6, first), (4..8, second), (12..14, first)]);
+
+        let colors: Vec<_> = styles
+            .iter()
+            .map(|(range, style)| (range.clone(), style.color, style.font_weight))
+            .collect();
+        let bold = Some(gpui::FontWeight::BOLD);
+        assert_eq!(
+            colors,
+            vec![
+                (0..2, None, bold),
+                (2..4, Some(gpui::red()), bold),
+                (4..6, Some(gpui::green()), bold),
+                (6..8, Some(gpui::green()), bold),
+                (8..10, None, bold),
+                (12..14, Some(gpui::red()), None),
+            ]
+        );
     }
 
     #[test]
