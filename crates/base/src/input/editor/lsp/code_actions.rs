@@ -55,29 +55,10 @@ impl InputBaseState<EditorMode> {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let providers = self.extras.lsp.code_action_providers.clone();
-        let range = self.selected_range();
-
-        let state = cx.entity();
         let version = self.document_version;
+        let fetch = self.fetch_code_actions(window, cx);
         self.extras.context_menu_task = cx.spawn_in(window, async move |editor, cx| {
-            let mut provider_responses = vec![];
-            _ = cx.update(|window, cx| {
-                for provider in providers {
-                    let task = provider.code_actions(state.clone(), range.clone(), window, cx);
-                    provider_responses.push((provider.id(), task));
-                }
-            });
-
-            let mut code_actions: Vec<CodeActionItem> = vec![];
-            for (provider_id, provider_responses) in provider_responses {
-                if let Some(responses) = provider_responses.await.ok() {
-                    code_actions.extend(responses.into_iter().map(|action| CodeActionItem {
-                        provider_id: provider_id.clone(),
-                        action,
-                    }))
-                }
-            }
+            let code_actions = fetch.await;
 
             if code_actions.is_empty() {
                 editor.update(cx, |editor, cx| {
@@ -114,6 +95,40 @@ impl InputBaseState<EditorMode> {
 
             Ok(())
         });
+    }
+
+    /// Asks every provider for the code actions at the selection. A provider
+    /// that fails offers nothing, the others still answer.
+    pub(crate) fn fetch_code_actions(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<Vec<CodeActionItem>> {
+        let providers = self.extras.lsp.code_action_providers.clone();
+        let range = self.selected_range();
+        let state = cx.entity();
+        // Providers read the state, which is borrowed until this update
+        // returns, so they are asked from the spawned task.
+        cx.spawn_in(window, async move |_, cx| {
+            let mut provider_responses = vec![];
+            _ = cx.update(|window, cx| {
+                for provider in providers {
+                    let task = provider.code_actions(state.clone(), range.clone(), window, cx);
+                    provider_responses.push((provider.id(), task));
+                }
+            });
+
+            let mut code_actions: Vec<CodeActionItem> = vec![];
+            for (provider_id, provider_response) in provider_responses {
+                if let Ok(responses) = provider_response.await {
+                    code_actions.extend(responses.into_iter().map(|action| CodeActionItem {
+                        provider_id: provider_id.clone(),
+                        action,
+                    }))
+                }
+            }
+            code_actions
+        })
     }
 
     pub fn perform_code_action(
