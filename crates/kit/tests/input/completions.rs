@@ -672,11 +672,11 @@ fn tab_indents_instead_of_accepting_popup_and_invalidates_its_response(cx: &mut 
     let fixture = Fixture::deferred(cx);
     fixture.start_completion(cx);
     fixture.press("tab", cx);
-    fixture.assert_editor("p  ", cx);
+    fixture.assert_editor("p ", cx);
     fixture.provider.respond(0, Some("print"));
     fixture.settle(cx);
     fixture.press("enter", cx);
-    fixture.assert_editor("p  \n", cx);
+    fixture.assert_editor("p \n", cx);
 }
 
 #[gpui_kit::test]
@@ -684,9 +684,9 @@ fn tab_dismisses_visible_completion_without_accepting_it(cx: &mut TestAppContext
     let fixture = Fixture::new(cx);
     fixture.start_completion(cx);
     fixture.press("tab", cx);
-    fixture.assert_editor("p  ", cx);
+    fixture.assert_editor("p ", cx);
     fixture.press("enter", cx);
-    fixture.assert_editor("p  \n", cx);
+    fixture.assert_editor("p \n", cx);
 }
 
 fn protection_invalidates_completion(cx: &mut TestAppContext, disabled: bool) {
@@ -1075,8 +1075,9 @@ fn inline_completion_tab_accepts_without_issuing_another_request(cx: &mut TestAp
 fn escape_dismisses_inline_completion_and_tab_returns_to_indentation(cx: &mut TestAppContext) {
     let (fixture, _) = inline_fixture(cx, false);
     fixture.press("escape", cx);
+    // Tab moves to the next tab stop, which is column 2 after "p".
     fixture.press("tab", cx);
-    fixture.assert_editor("p  ", cx);
+    fixture.assert_editor("p ", cx);
 }
 
 #[gpui_kit::test]
@@ -1091,7 +1092,7 @@ fn typing_clears_inline_suggestion_before_next_debounce(cx: &mut TestAppContext)
 fn inline_provider_error_preserves_tab_indentation(cx: &mut TestAppContext) {
     let (fixture, _) = inline_fixture(cx, true);
     fixture.press("tab", cx);
-    fixture.assert_editor("p  ", cx);
+    fixture.assert_editor("p ", cx);
 }
 
 #[derive(Clone, Copy)]

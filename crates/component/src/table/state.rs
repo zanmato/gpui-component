@@ -550,6 +550,13 @@ where
             .filter(|_| self.selection_mode.is_row())
     }
 
+    /// The row keyboard navigation moves from. Unlike [`Self::selected_row`]
+    /// it outlasts a switch to column selection, so the arrows pick up where
+    /// the row selection left off.
+    fn navigation_row(&self) -> Option<usize> {
+        self.selected_rows.iter().next().copied()
+    }
+
     /// Sets the selected row to the given index.
     pub fn set_selected_row(&mut self, row_ix: usize, cx: &mut Context<Self>) {
         let is_down = self
@@ -1112,7 +1119,7 @@ where
         if !self.row_selectable {
             return;
         }
-        let mut selected_row = self.selected_row().unwrap_or(0);
+        let mut selected_row = self.navigation_row().unwrap_or(0);
         if selected_row > 0 {
             selected_row = selected_row.saturating_sub(1);
         } else {
@@ -1157,7 +1164,7 @@ where
         if !self.row_selectable {
             return;
         }
-        let selected_row = match self.selected_row() {
+        let selected_row = match self.navigation_row() {
             Some(selected_row) if selected_row < rows_count.saturating_sub(1) => selected_row + 1,
             Some(selected_row) => {
                 if self.loop_selection {
@@ -1240,7 +1247,7 @@ where
         if !self.row_selectable {
             return;
         }
-        let current = self.selected_row().unwrap_or(0);
+        let current = self.navigation_row().unwrap_or(0);
         let target = current.saturating_sub(step);
         self.set_selected_row(target, cx);
     }
@@ -1275,7 +1282,7 @@ where
         if !self.row_selectable {
             return;
         }
-        let current = self.selected_row().unwrap_or(0);
+        let current = self.navigation_row().unwrap_or(0);
         let max_row = rows_count.saturating_sub(1);
         let target = (current + step).min(max_row);
         self.set_selected_row(target, cx);
