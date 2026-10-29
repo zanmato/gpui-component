@@ -158,6 +158,18 @@ impl InputModeKind for EditorMode {
         state.handle_hover_definition(offset, window, cx);
     }
 
+    fn context_menu_has_code_actions(
+        state: &mut InputBaseState<Self>,
+        window: &mut Window,
+        cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) -> Option<gpui::Task<bool>> {
+        if state.extras.lsp.code_action_providers.is_empty() {
+            return None;
+        }
+        let fetch = state.fetch_code_actions(window, cx);
+        Some(cx.spawn(async move |_, _| !fetch.await.is_empty()))
+    }
+
     fn on_cursor_moved(
         state: &mut InputBaseState<Self>,
         _offset: usize,

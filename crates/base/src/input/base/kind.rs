@@ -329,6 +329,17 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
     ) {
     }
 
+    /// Asks the code action providers whether they have anything at the
+    /// cursor, so the context menu offers Show Code Actions only then. `None`
+    /// when the mode has no providers to ask.
+    fn context_menu_has_code_actions(
+        _state: &mut InputBaseState<Self>,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<InputBaseState<Self>>,
+    ) -> Option<gpui::Task<bool>> {
+        None
+    }
+
     /// Reacts to the cursor moving without an edit (click, arrow keys, drag),
     /// so signature help can follow the call around the cursor.
     fn on_cursor_moved(
