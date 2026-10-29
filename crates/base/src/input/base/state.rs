@@ -2231,14 +2231,21 @@ impl<M: InputModeKind> InputBaseState<M> {
         };
         let capabilities = self.context_menu_capabilities();
         let code_actions = if capabilities.is_editable() && capabilities.has_code_actions() {
-            M::context_menu_has_code_actions(self, window, cx)
+            M::context_menu_code_actions(self, window, cx)
         } else {
             None
         };
         let Some(code_actions) = code_actions else {
             self.context_menu_open_task = Task::ready(());
             cx.defer_in(window, move |this, window, cx| {
-                this.show_context_menu(handler, capabilities, position, window, cx);
+                this.show_context_menu(
+                    handler,
+                    NativeMenu::new(),
+                    capabilities,
+                    position,
+                    window,
+                    cx,
+                );
             });
             return;
         };
@@ -2249,11 +2256,9 @@ impl<M: InputModeKind> InputBaseState<M> {
             .background_executor()
             .timer(CONTEXT_MENU_CODE_ACTIONS_WAIT);
         self.context_menu_open_task = cx.spawn_in(window, async move |this, cx| {
-            // A provider still working when the wait ends may yet find an
-            // action, so the item stays rather than hide one that exists.
-            let has_code_actions = smol::future::or(code_actions, async move {
+            let code_actions = smol::future::or(async move { Some(code_actions.await) }, async {
                 timeout.await;
-                true
+                None
             })
             .await;
             this.update_in(cx, |this, window, cx| {
@@ -2261,8 +2266,17 @@ impl<M: InputModeKind> InputBaseState<M> {
                 if this.document_version != version || this.selected_range() != selection {
                     return;
                 }
-                let capabilities = capabilities.code_actions(has_code_actions);
-                this.show_context_menu(handler, capabilities, position, window, cx);
+                // The found actions are listed in the menu itself. A provider
+                // still working when the wait ends may yet find one, so then
+                // the menu offers to show them once they arrive.
+                let (menu, capabilities) = match code_actions {
+                    Some(items) => (
+                        M::context_menu_code_action_entries(this, items),
+                        capabilities.code_actions(false),
+                    ),
+                    None => (NativeMenu::new(), capabilities),
+                };
+                this.show_context_menu(handler, menu, capabilities, position, window, cx);
             })
             .ok();
         });
@@ -2273,13 +2287,14 @@ impl<M: InputModeKind> InputBaseState<M> {
         handler: Rc<
             dyn Fn(NativeMenu, InputContextMenuCapabilities, Point<Pixels>, &mut Window, &mut App),
         >,
+        menu: NativeMenu,
         capabilities: InputContextMenuCapabilities,
         position: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let previous_focus = window.focused(cx);
-        handler(NativeMenu::new(), capabilities, position, window, cx);
+        handler(menu, capabilities, position, window, cx);
         // A drawn menu takes focus synchronously; native menus leave it
         // on the input. Capture it here, while the input is already
         // borrowed, rather than re-entering the state from its handler.
@@ -6192,6 +6207,17 @@ mod tests {
     struct ActionsAt {
         at: usize,
         delay: Option<std::time::Duration>,
+        performed: Rc<Cell<usize>>,
+    }
+
+    impl ActionsAt {
+        fn new(at: usize, delay: Option<std::time::Duration>) -> Self {
+            Self {
+                at,
+                delay,
+                performed: Rc::new(Cell::new(0)),
+            }
+        }
     }
 
     impl crate::input::CodeActionProvider for ActionsAt {
@@ -6234,89 +6260,170 @@ mod tests {
             _: &mut Window,
             _: &mut App,
         ) -> Task<anyhow::Result<()>> {
+            self.performed.set(self.performed.get() + 1);
             Task::ready(Ok(()))
         }
     }
 
-    /// Right clicks at `offset` and returns whether each menu shown offered
-    /// code actions.
+    /// One context menu as shown: the labels the engine listed, and whether
+    /// the menu was told to offer Show Code Actions.
+    #[derive(Debug, PartialEq)]
+    struct ShownMenu {
+        entries: Vec<SharedString>,
+        show_code_actions: bool,
+    }
+
+    struct RightClick {
+        menus: Rc<std::cell::RefCell<Vec<ShownMenu>>>,
+        performed: Rc<Cell<usize>>,
+        input: Entity<EditorState>,
+        cx: VisualTestContext,
+    }
+
     fn right_click_code_actions(
         provider: ActionsAt,
         offset: usize,
         cx: &mut TestAppContext,
-    ) -> (
-        Rc<std::cell::RefCell<Vec<bool>>>,
-        Entity<EditorState>,
-        VisualTestContext,
-    ) {
+    ) -> RightClick {
         cx.update(crate::init);
         let input_view = InputView::new(cx);
         let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
         let input = input_view.input;
         let menus = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let performed = provider.performed.clone();
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value("SELECT * FROM t", window, cx);
                 state.extras.lsp.code_action_providers = vec![Rc::new(provider)];
                 let menus = menus.clone();
-                state.on_context_menu(Rc::new(move |_, capabilities, _, _, _| {
-                    menus.borrow_mut().push(capabilities.has_code_actions());
+                state.on_context_menu(Rc::new(move |menu, capabilities, _, _, _| {
+                    let entries = menu
+                        .items
+                        .iter()
+                        .filter_map(|item| match item {
+                            super::super::NativeMenuItem::Action { label, .. } => {
+                                Some(label.clone())
+                            }
+                            super::super::NativeMenuItem::Separator => None,
+                        })
+                        .collect();
+                    menus.borrow_mut().push(ShownMenu {
+                        entries,
+                        show_code_actions: capabilities.has_code_actions(),
+                    });
                 }));
                 state.handle_right_click_menu(point(px(0.), px(0.)), offset, window, cx);
             })
         });
-        (menus, input, cx)
+        RightClick {
+            menus,
+            performed,
+            input,
+            cx,
+        }
+    }
+
+    fn choose_menu_code_action(click: &mut RightClick, index: usize) {
+        click.cx.update(|window, cx| {
+            click.input.update(cx, |state, cx| {
+                state.on_action_perform_context_menu_code_action(
+                    &crate::input::PerformContextMenuCodeAction { index },
+                    window,
+                    cx,
+                );
+            })
+        });
     }
 
     #[gpui::test]
-    fn context_menu_offers_code_actions_only_where_there_are_some(cx: &mut TestAppContext) {
-        let (menus, _, cx) = right_click_code_actions(ActionsAt { at: 7, delay: None }, 7, cx);
-        cx.run_until_parked();
-        assert_eq!(*menus.borrow(), vec![true]);
+    fn context_menu_lists_the_code_actions_at_the_cursor(cx: &mut TestAppContext) {
+        let mut click = right_click_code_actions(ActionsAt::new(7, None), 7, cx);
+        click.cx.run_until_parked();
+        assert_eq!(
+            *click.menus.borrow(),
+            vec![ShownMenu {
+                entries: vec!["Action".into()],
+                show_code_actions: false,
+            }]
+        );
+        choose_menu_code_action(&mut click, 0);
+        assert_eq!(click.performed.get(), 1);
+        choose_menu_code_action(&mut click, 0);
+        assert_eq!(click.performed.get(), 1, "a menu entry runs once");
     }
 
     #[gpui::test]
-    fn context_menu_leaves_out_code_actions_where_there_are_none(cx: &mut TestAppContext) {
-        let (menus, _, cx) = right_click_code_actions(ActionsAt { at: 7, delay: None }, 2, cx);
-        cx.run_until_parked();
-        assert_eq!(*menus.borrow(), vec![false]);
+    fn context_menu_lists_no_code_actions_where_there_are_none(cx: &mut TestAppContext) {
+        let click = right_click_code_actions(ActionsAt::new(7, None), 2, cx);
+        click.cx.run_until_parked();
+        assert_eq!(
+            *click.menus.borrow(),
+            vec![ShownMenu {
+                entries: Vec::new(),
+                show_code_actions: false,
+            }]
+        );
     }
 
     #[gpui::test]
-    fn context_menu_keeps_code_actions_from_a_provider_still_answering(cx: &mut TestAppContext) {
-        let (menus, _, cx) = right_click_code_actions(
-            ActionsAt {
-                at: 7,
-                delay: Some(std::time::Duration::from_secs(5)),
-            },
-            2,
+    fn context_menu_offers_to_show_code_actions_of_a_provider_still_answering(
+        cx: &mut TestAppContext,
+    ) {
+        let click = right_click_code_actions(
+            ActionsAt::new(7, Some(std::time::Duration::from_secs(5))),
+            7,
             cx,
         );
-        cx.run_until_parked();
-        assert!(menus.borrow().is_empty(), "the menu waits for the provider");
-        cx.executor().advance_clock(CONTEXT_MENU_CODE_ACTIONS_WAIT);
-        cx.run_until_parked();
-        assert_eq!(*menus.borrow(), vec![true]);
+        click.cx.run_until_parked();
+        assert!(
+            click.menus.borrow().is_empty(),
+            "the menu waits for the provider"
+        );
+        click
+            .cx
+            .executor()
+            .advance_clock(CONTEXT_MENU_CODE_ACTIONS_WAIT);
+        click.cx.run_until_parked();
+        assert_eq!(
+            *click.menus.borrow(),
+            vec![ShownMenu {
+                entries: Vec::new(),
+                show_code_actions: true,
+            }]
+        );
     }
 
     #[gpui::test]
     fn context_menu_waiting_for_code_actions_is_dropped_by_typing(cx: &mut TestAppContext) {
-        let (menus, input, mut cx) = right_click_code_actions(
-            ActionsAt {
-                at: 7,
-                delay: Some(std::time::Duration::from_millis(50)),
-            },
+        let mut click = right_click_code_actions(
+            ActionsAt::new(7, Some(std::time::Duration::from_millis(50))),
             7,
             cx,
         );
-        cx.update(|window, cx| {
-            input.update(cx, |state, cx| {
+        click.cx.update(|window, cx| {
+            click.input.update(cx, |state, cx| {
                 state.replace_text_in_range(None, "x", window, cx);
             })
         });
-        cx.executor().advance_clock(CONTEXT_MENU_CODE_ACTIONS_WAIT);
-        cx.run_until_parked();
-        assert!(menus.borrow().is_empty());
+        click
+            .cx
+            .executor()
+            .advance_clock(CONTEXT_MENU_CODE_ACTIONS_WAIT);
+        click.cx.run_until_parked();
+        assert!(click.menus.borrow().is_empty());
+    }
+
+    #[gpui::test]
+    fn context_menu_code_action_is_not_run_on_changed_text(cx: &mut TestAppContext) {
+        let mut click = right_click_code_actions(ActionsAt::new(7, None), 7, cx);
+        click.cx.run_until_parked();
+        click.cx.update(|window, cx| {
+            click.input.update(cx, |state, cx| {
+                state.replace_text_in_range(None, "x", window, cx);
+            })
+        });
+        choose_menu_code_action(&mut click, 0);
+        assert_eq!(click.performed.get(), 0);
     }
 
     #[gpui::test]

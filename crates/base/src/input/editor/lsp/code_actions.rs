@@ -1,9 +1,18 @@
 use anyhow::Result;
-use gpui::{App, Context, Entity, SharedString, Task, Window};
+use gpui::{Action, App, Context, Entity, SharedString, Task, Window};
 use lsp_types::CodeAction;
+use serde::Deserialize;
 use std::ops::Range;
 
-use crate::input::{EditorMode, EditorState, InputBaseState, ToggleCodeActions};
+use crate::input::{EditorMode, EditorState, InputBaseState, NativeMenu, ToggleCodeActions};
+
+/// Performs one of the code actions the context menu lists, by its place
+/// in that list.
+#[derive(Action, Clone, PartialEq, Eq, Deserialize)]
+#[action(namespace = input, no_json)]
+pub struct PerformContextMenuCodeAction {
+    pub index: usize,
+}
 
 pub trait CodeActionProvider {
     /// The id for this CodeAction.
@@ -129,6 +138,42 @@ impl InputBaseState<EditorMode> {
             }
             code_actions
         })
+    }
+
+    /// Keeps the code actions found for a right click and lists them as the
+    /// first entries of its menu.
+    pub(crate) fn context_menu_code_action_entries(
+        &mut self,
+        items: Vec<CodeActionItem>,
+    ) -> NativeMenu {
+        let menu = items
+            .iter()
+            .enumerate()
+            .fold(NativeMenu::new(), |menu, (index, item)| {
+                menu.menu(
+                    item.action.title.clone(),
+                    Box::new(PerformContextMenuCodeAction { index }),
+                )
+            });
+        self.extras.context_menu_code_actions = (self.document_version, items);
+        menu
+    }
+
+    pub(crate) fn on_action_perform_context_menu_code_action(
+        &mut self,
+        action: &PerformContextMenuCodeAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (version, items) = std::mem::take(&mut self.extras.context_menu_code_actions);
+        // Its edits address the text the action was found for.
+        if version != self.document_version {
+            return;
+        }
+        let Some(item) = items.into_iter().nth(action.index) else {
+            return;
+        };
+        self.perform_code_action(&item, window, cx);
     }
 
     pub fn perform_code_action(

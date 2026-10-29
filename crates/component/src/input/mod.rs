@@ -32,13 +32,13 @@ pub use gpui_base::input::{
     InputHighlighter, InputHighlighterFactory, InputState, InvisibleCharacter, Lsp, MaskPattern,
     MoveDown, MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight, MoveToEnd,
     MoveToEndOfLine, MoveToNextWord, MoveToPreviousWord, MoveToStart, MoveToStartOfLine, MoveUp,
-    Outdent, OutdentInline, Paste, Point, RangeDecoration, RangeDecorationCollection,
-    RangeDecorationStyle, Redo, Replace, Rope, RopeExt, RopeLines, Search, SelectAll, SelectToEnd,
-    SelectToEndOfLine, SelectToNextWordEnd, SelectToPreviousWordStart, SelectToStart,
-    SelectToStartOfLine, Selection, ShowCharacterPalette, ShowDocumentHandler,
-    SignatureHelpProvider, SignatureHelpState, TabSize, TextDecoration, TextDecorationCollection,
-    TextareaState, ToggleCodeActions, ToggleSignatureHelp, Undo, WrappingIndent,
-    invisible_character,
+    Outdent, OutdentInline, Paste, PerformContextMenuCodeAction, Point, RangeDecoration,
+    RangeDecorationCollection, RangeDecorationStyle, Redo, Replace, Rope, RopeExt, RopeLines,
+    Search, SelectAll, SelectToEnd, SelectToEndOfLine, SelectToNextWordEnd,
+    SelectToPreviousWordStart, SelectToStart, SelectToStartOfLine, Selection, ShowCharacterPalette,
+    ShowDocumentHandler, SignatureHelpProvider, SignatureHelpState, TabSize, TextDecoration,
+    TextDecorationCollection, TextareaState, ToggleCodeActions, ToggleSignatureHelp, Undo,
+    WrappingIndent, invisible_character,
 };
 pub use gpui_base::input::{EditorMode, InputMode, InputModeKind, TextareaMode};
 #[doc(hidden)]

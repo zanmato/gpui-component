@@ -329,15 +329,24 @@ pub trait InputModeKind: sealed::Sealed + Sized + 'static {
     ) {
     }
 
-    /// Asks the code action providers whether they have anything at the
-    /// cursor, so the context menu offers Show Code Actions only then. `None`
-    /// when the mode has no providers to ask.
-    fn context_menu_has_code_actions(
+    /// Asks the code action providers for the actions at the cursor, so the
+    /// context menu can list them. `None` when the mode has no providers to
+    /// ask.
+    fn context_menu_code_actions(
         _state: &mut InputBaseState<Self>,
         _window: &mut Window,
         _cx: &mut gpui::Context<InputBaseState<Self>>,
-    ) -> Option<gpui::Task<bool>> {
+    ) -> Option<gpui::Task<Vec<crate::input::CodeActionItem>>> {
         None
+    }
+
+    /// The menu entries for the code actions a right click found, which the
+    /// mode keeps until one of them is chosen.
+    fn context_menu_code_action_entries(
+        _state: &mut InputBaseState<Self>,
+        _items: Vec<crate::input::CodeActionItem>,
+    ) -> super::NativeMenu {
+        super::NativeMenu::new()
     }
 
     /// Reacts to the cursor moving without an edit (click, arrow keys, drag),
@@ -398,6 +407,9 @@ pub struct EditorExtras {
     pub(crate) hover_popover: Option<HoverPopoverState>,
     pub(crate) hover_definition: HoverDefinition,
     pub(crate) context_menu_task: Task<anyhow::Result<()>>,
+    /// The code actions listed in the open context menu, by their place in it,
+    /// with the document version they were found for.
+    pub(crate) context_menu_code_actions: (u64, Vec<crate::input::CodeActionItem>),
     pub(crate) signature_help: crate::input::lsp::SignatureHelpState,
 }
 
@@ -412,6 +424,7 @@ impl Default for EditorExtras {
             hover_popover: None,
             hover_definition: HoverDefinition::default(),
             context_menu_task: Task::ready(Ok(())),
+            context_menu_code_actions: (0, Vec::new()),
             signature_help: crate::input::lsp::SignatureHelpState::default(),
         }
     }

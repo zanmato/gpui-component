@@ -610,15 +610,22 @@ impl RenderOnce for Input {
         state.set_text_align(text_align, cx);
         let custom = self.context_menu_builder.clone();
         state.on_context_menu(
-            Rc::new(move |_, capabilities, position, window, cx| {
+            Rc::new(move |engine_menu, capabilities, position, window, cx| {
+                // The engine lists what it found at the cursor, such as code
+                // actions, which go first.
+                let has_engine_items = !engine_menu.items.is_empty();
+                let mut engine_menu = NativeMenu::from(engine_menu);
+                if has_engine_items {
+                    engine_menu = engine_menu.separator();
+                }
                 let menu = if let Some(custom) = custom.as_ref() {
-                    custom(NativeMenu::new(), window, cx)
+                    custom(engine_menu, window, cx)
                 } else {
                     let enabled = !capabilities.is_disabled();
                     // A read-only input can still navigate the code, it only
                     // rejects the items that would change the text.
                     let editable = enabled && !capabilities.is_readonly();
-                    let mut menu = NativeMenu::new();
+                    let mut menu = engine_menu;
                     if capabilities.is_code_editor() {
                         let has_go_to_definition = enabled && capabilities.has_definition();
                         let has_code_actions = editable && capabilities.has_code_actions();

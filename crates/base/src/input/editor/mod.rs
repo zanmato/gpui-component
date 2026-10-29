@@ -158,16 +158,22 @@ impl InputModeKind for EditorMode {
         state.handle_hover_definition(offset, window, cx);
     }
 
-    fn context_menu_has_code_actions(
+    fn context_menu_code_actions(
         state: &mut InputBaseState<Self>,
         window: &mut Window,
         cx: &mut gpui::Context<InputBaseState<Self>>,
-    ) -> Option<gpui::Task<bool>> {
+    ) -> Option<gpui::Task<Vec<crate::input::CodeActionItem>>> {
         if state.extras.lsp.code_action_providers.is_empty() {
             return None;
         }
-        let fetch = state.fetch_code_actions(window, cx);
-        Some(cx.spawn(async move |_, _| !fetch.await.is_empty()))
+        Some(state.fetch_code_actions(window, cx))
+    }
+
+    fn context_menu_code_action_entries(
+        state: &mut InputBaseState<Self>,
+        items: Vec<crate::input::CodeActionItem>,
+    ) -> super::NativeMenu {
+        state.context_menu_code_action_entries(items)
     }
 
     fn on_cursor_moved(
@@ -225,6 +231,10 @@ impl InputModeKind for EditorMode {
     ) -> Stateful<Div> {
         element
             .on_action(window.listener_for(entity, InputBaseState::on_action_toggle_code_actions))
+            .on_action(window.listener_for(
+                entity,
+                InputBaseState::on_action_perform_context_menu_code_action,
+            ))
             .on_action(window.listener_for(entity, InputBaseState::on_action_go_to_definition))
             .on_action(window.listener_for(entity, InputBaseState::on_action_toggle_signature_help))
             .on_action(window.listener_for(entity, InputBaseState::on_action_signature_help_next))
