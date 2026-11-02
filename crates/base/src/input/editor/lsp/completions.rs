@@ -330,10 +330,16 @@ impl InputBaseState<EditorMode> {
                 trigger_kind: lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
                 trigger_character: Some(query),
             },
-            reopen && latched.is_some(),
             window,
             cx,
         );
+        // Keep showing the previous items, re-highlighted for the new query,
+        // until the response replaces them. Closing here and opening again
+        // when the response arrives makes the menu blink on every keystroke.
+        if reopen && latched.is_some() {
+            self.extras.context_menu_content.completion.open = true;
+            self.extras.context_menu_content.completion.bump();
+        }
     }
 
     pub(crate) fn on_action_show_completions(
@@ -391,23 +397,18 @@ impl InputBaseState<EditorMode> {
                 trigger_kind: lsp_types::CompletionTriggerKind::INVOKED,
                 trigger_character: None,
             },
-            false,
             window,
             cx,
         );
     }
 
     /// Record the word a menu is for and ask `provider` about the caret.
-    ///
-    /// With `keep_open`, the menu stays on screen with its previous items
-    /// until the response replaces them.
     fn request_completions(
         &mut self,
         provider: Rc<dyn CompletionProvider>,
         start_offset: usize,
         query: String,
         completion_context: CompletionContext,
-        keep_open: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -424,14 +425,6 @@ impl InputBaseState<EditorMode> {
             .completion
             .query
             .clone_from(&query);
-        // Keep showing the previous items, re-highlighted for the new query,
-        // until the response replaces them. Closing here and opening again
-        // when the response arrives makes the menu blink on every keystroke.
-        if keep_open {
-            self.extras.context_menu_content.completion.open = true;
-            self.extras.context_menu_content.completion.bump();
-        }
-
         let provider_responses =
             provider.completions(&self.text, new_offset, completion_context, window, cx);
         let version = self.document_version;
