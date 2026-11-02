@@ -3707,7 +3707,6 @@ mod tests {
     use super::*;
     use crate::ElementExt as _;
     #[cfg(feature = "gpui-fast")]
-    use gpui::StatefulInteractiveElement as _;
     use gpui::{
         Bounds, ContentMask, Context, Hitbox, HitboxBehavior, HitboxId, InteractiveElement as _,
         IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
