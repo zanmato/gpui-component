@@ -562,11 +562,15 @@ impl TextWrapper {
         let font_size = self.font_size;
         let wrapping_indent = self.wrapping_indent;
         let tab_stop = tab_stop_width(&text_system, &font, font_size, self.tab_size);
+        // Inline elements wrap through gpui's own wrapper, which measures no
+        // safe restart point, so an edit near them rewraps its whole line.
+        let incremental = !reuse_widths && metrics.is_empty();
         self.update_lines(
             changed_text,
             range,
             new_text,
             reuse_widths,
+            incremental,
             &mut |line_str, wrap_width, line_start| {
                 let mut fragments = Vec::new();
                 let mut offset = 0;
@@ -716,17 +720,22 @@ impl TextWrapper {
             range,
             new_text,
             false,
+            false,
             &mut |text, width, start| MeasuredWrap::uncached(wrap_line(text, width, start)),
         );
     }
 
     /// Splice changed rows into the sole display map, retaining valid rows on full width passes.
+    ///
+    /// With `incremental`, an edit within one long line rewraps only the rows
+    /// around it, see [`Self::rewrap_around_edit`].
     fn update_lines<F>(
         &mut self,
         changed_text: &Rope,
         range: &Range<usize>,
         new_text: &Rope,
         reuse_widths: bool,
+        incremental: bool,
         wrap_line: &mut F,
     ) where
         F: FnMut(&str, Pixels, usize) -> MeasuredWrap,
@@ -743,6 +752,23 @@ impl TextWrapper {
         let new_end_row = changed_text
             .offset_to_point(range.start + new_text.len())
             .row;
+
+        if incremental
+            && start_row == end_row
+            && new_start_row == new_end_row
+            && let Some(item) =
+                self.rewrap_around_edit(changed_text, range, new_text, start_row, wrap_line)
+        {
+            let mut cursor = self.lines.cursor::<BufferRows>(&());
+            let mut new_tree = cursor.slice(&BufferRows(start_row), Bias::Right);
+            cursor.seek_forward(&BufferRows(start_row + 1), Bias::Right);
+            new_tree.push(item, &());
+            new_tree.append(cursor.suffix(), &());
+            drop(cursor);
+            self.lines = new_tree;
+            self.text = changed_text.clone();
+            return;
+        }
 
         let mut new_lines = Vec::with_capacity(new_end_row.saturating_sub(new_start_row) + 1);
         let wrap_width = self.wrap_width;
@@ -837,6 +863,140 @@ impl TextWrapper {
         }
 
         self.text = changed_text.clone();
+    }
+
+    /// Rewrap only the rows of buffer line `row` around an edit within it,
+    /// keeping the rows before and after, or None when the whole line must
+    /// be wrapped again.
+    ///
+    /// A line megabytes long took tens of milliseconds to wrap on every
+    /// keystroke. Wrapping is greedy: each row's break depends only on the
+    /// text from the row's start on, as far ahead as measuring a row looks.
+    /// So the rows ending well before the edit stay, wrapping restarts two
+    /// rows before it on a window of text, and once a new break past the
+    /// edit lands on an old one, the old rows from there on stay too.
+    ///
+    /// Only a line without indentation qualifies: a window wrapped on its
+    /// own measures its rows at full width, as continuation rows of such a
+    /// line are.
+    fn rewrap_around_edit<F>(
+        &self,
+        changed_text: &Rope,
+        range: &Range<usize>,
+        new_text: &Rope,
+        row: usize,
+        wrap_line: &mut F,
+    ) -> Option<LineItem>
+    where
+        F: FnMut(&str, Pixels, usize) -> MeasuredWrap,
+    {
+        // Lines this short wrap in well under a frame.
+        const MIN_ROWS: usize = 64;
+        // Text wrapped after the edit before the rows must resync.
+        const WINDOW: usize = 64 * 1024;
+        // A break this close to the end of a window may have been measured
+        // against the cut instead of the text after it.
+        const WINDOW_SLACK: usize = 8 * 1024;
+        // How far past the edit a resyncing break must be, so the break
+        // opportunities around it cannot depend on the edited text.
+        const RESYNC_DISTANCE: usize = 64;
+
+        let wrap_width = self.wrap_width?;
+        if self.wrapping_indent != WrappingIndent::Same {
+            return None;
+        }
+        let old = self.line(row)?;
+        if old.indent != 0 || old.wrapped_lines.len() < MIN_ROWS {
+            return None;
+        }
+
+        let old_line_start = self.text.line_start_offset(row);
+        let edit_start = range.start.checked_sub(old_line_start)?;
+        let old_edit_end = range.end.checked_sub(old_line_start)?;
+        let new_edit_end = edit_start + new_text.len();
+        let line = changed_text.slice_line(row);
+        let new_len = line.len();
+        if old_edit_end > old.len || new_len + old_edit_end != old.len + new_edit_end {
+            return None;
+        }
+        let shift = |old_ix: usize| old_ix + new_edit_end - old_edit_end;
+
+        let holding = old
+            .wrapped_lines
+            .partition_point(|row| row.end <= edit_start);
+        let restart_row = holding.saturating_sub(2);
+        let restart = old.wrapped_lines.get(restart_row)?.start;
+
+        let mut window_end = (new_edit_end + WINDOW).min(new_len);
+        while !line.is_char_boundary(window_end) {
+            window_end -= 1;
+        }
+        let window = String::from(line.slice(restart..window_end));
+        // A window starting with spaces would indent its own continuation rows.
+        if window.starts_with(' ') {
+            return None;
+        }
+        let measured = wrap_line(
+            &window,
+            wrap_width,
+            changed_text.line_start_offset(row) + restart,
+        );
+        let reliable_end = if window_end == new_len {
+            usize::MAX
+        } else {
+            window_end.saturating_sub(WINDOW_SLACK)
+        };
+
+        let mut wrapped_lines: SmallVec<[Range<usize>; 1]> =
+            old.wrapped_lines[..restart_row].iter().cloned().collect();
+        let mut row_start = restart;
+        for boundary in &measured.boundaries {
+            let ix = restart + boundary.ix;
+            if ix > reliable_end {
+                return None;
+            }
+            if ix >= new_edit_end + RESYNC_DISTANCE {
+                let old_ix = ix + old_edit_end - new_edit_end;
+                let old_row = old.wrapped_lines.partition_point(|row| row.start < old_ix);
+                if old
+                    .wrapped_lines
+                    .get(old_row)
+                    .is_some_and(|row| row.start == old_ix)
+                {
+                    wrapped_lines.push(row_start..ix);
+                    wrapped_lines.extend(
+                        old.wrapped_lines[old_row..]
+                            .iter()
+                            .map(|row| shift(row.start)..shift(row.end)),
+                    );
+                    let mut valid_widths = old.valid_widths;
+                    valid_widths.intersect(measured.valid_widths);
+                    return Some(LineItem {
+                        len: new_len,
+                        indent: 0,
+                        wrapped_lines,
+                        valid_widths,
+                    });
+                }
+            }
+            wrapped_lines.push(row_start..ix);
+            row_start = ix;
+        }
+        // Without a resync the window must have reached the end of the line.
+        if window_end != new_len {
+            return None;
+        }
+        if row_start < new_len || row_start == 0 {
+            wrapped_lines.push(row_start..new_len);
+        }
+        let mut valid_widths = old.valid_widths;
+        valid_widths.intersect(measured.valid_widths);
+        Some(LineItem {
+            len: new_len,
+            indent: 0,
+            wrapped_lines,
+            valid_widths,
+        })
     }
 
     /// Update the text wrapper and recalculate the wrapped lines.
@@ -961,7 +1121,14 @@ impl WrapDisplayPoint {
 pub(crate) struct LineLayout {
     /// Total bytes length of this line.
     len: usize,
-    /// The soft wrapped lines of this line (Include the first line).
+    /// The byte range of every soft wrapped row of this line, shaped or not.
+    rows: SmallVec<[Range<usize>; 1]>,
+    /// The row [`Self::wrapped_lines`] starts at. A line that wraps into far
+    /// more rows than the viewport holds is only shaped around the viewport,
+    /// as shaping, copying and keeping every row of a line megabytes long
+    /// took far longer than a frame.
+    first_shaped_row: usize,
+    /// The shaped soft wrapped rows, from [`Self::first_shaped_row`] on.
     pub(crate) wrapped_lines: SmallVec<[InputLine; 1]>,
     /// Extra left offset applied to continuation wrapped lines, used to reserve the first line's
     /// indentation when [`WrappingIndent::Same`] is used.
@@ -984,6 +1151,8 @@ impl LineLayout {
         Self {
             len: 0,
             longest_width: px(0.),
+            rows: SmallVec::new(),
+            first_shaped_row: 0,
             wrapped_lines: SmallVec::new(),
             wrap_indent: px(0.),
             whitespace_chars: Vec::new(),
@@ -1023,25 +1192,78 @@ impl LineLayout {
     }
 
     pub(crate) fn set_wrapped_lines(&mut self, wrapped_lines: SmallVec<[ShapedLine; 1]>) {
-        self.len = wrapped_lines.iter().map(|l| l.len).sum();
-        let width = wrapped_lines
-            .iter()
-            .map(|l| l.width)
-            .max()
-            .unwrap_or_default();
-        self.longest_width = width;
-        self.wrapped_lines = wrapped_lines.into_iter().map(InputLine::from).collect();
+        self.set_input_lines(wrapped_lines.into_iter().map(InputLine::from).collect());
     }
 
     pub(crate) fn inline_lines(mut self, lines: SmallVec<[InputLine; 1]>) -> Self {
-        self.len = lines.iter().map(|line| line.len).sum();
+        self.set_input_lines(lines);
+        self
+    }
+
+    /// Every row of the line shaped, one after another.
+    fn set_input_lines(&mut self, lines: SmallVec<[InputLine; 1]>) {
+        let mut start = 0;
+        self.rows = lines
+            .iter()
+            .map(|line| {
+                let range = start..start + line.len;
+                start = range.end;
+                range
+            })
+            .collect();
+        self.len = start;
+        self.first_shaped_row = 0;
         self.longest_width = lines
             .iter()
             .map(|line| line.width)
             .max()
             .unwrap_or_default();
         self.wrapped_lines = lines;
+    }
+
+    /// A line `len` bytes long whose soft wrapped rows are `rows`, of which
+    /// only those from `first_shaped_row` on are shaped, as `shaped`.
+    pub(crate) fn shaped_window(
+        mut self,
+        len: usize,
+        rows: SmallVec<[Range<usize>; 1]>,
+        first_shaped_row: usize,
+        shaped: SmallVec<[ShapedLine; 1]>,
+    ) -> Self {
+        self.longest_width = shaped
+            .iter()
+            .map(|line| line.width)
+            .max()
+            .unwrap_or_default();
+        self.len = len;
+        self.rows = rows;
+        self.first_shaped_row = first_shaped_row;
+        self.wrapped_lines = shaped.into_iter().map(InputLine::from).collect();
         self
+    }
+
+    /// How many soft wrapped rows the line takes, shaped or not.
+    #[inline]
+    pub(crate) fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// The shaped rows: each row's index, the byte offset it starts at within
+    /// the line, and the row.
+    pub(crate) fn shaped_rows(&self) -> impl Iterator<Item = (usize, usize, &InputLine)> {
+        self.wrapped_lines
+            .iter()
+            .enumerate()
+            .map(move |(index, line)| {
+                let row = self.first_shaped_row + index;
+                let start = self.rows.get(row).map_or(0, |range| range.start);
+                (row, start, line)
+            })
+    }
+
+    fn shaped_row(&self, row: usize) -> Option<&InputLine> {
+        self.wrapped_lines
+            .get(row.checked_sub(self.first_shaped_row)?)
     }
 
     /// Find the spaces and tabs to draw `indicators` on and, with
@@ -1062,7 +1284,8 @@ impl LineLayout {
         };
         let boxes_invisible = invisible_color.is_some();
 
-        for (line_index, wrapped_line) in self.wrapped_lines.iter().enumerate() {
+        for (index, wrapped_line) in self.wrapped_lines.iter().enumerate() {
+            let line_index = self.first_shaped_row + index;
             let visible = wrapped_line.byte_range_for_x(visible_x);
             let Some(visible_text) = wrapped_line.text.get(visible.clone()) else {
                 continue;
@@ -1122,36 +1345,34 @@ impl LineLayout {
         last_layout: &LastLayout,
         line_end_affinity: bool,
     ) -> Option<Point<Pixels>> {
-        let mut acc_len = 0;
-        let mut offset_y = px(0.);
-
         let x_offset = last_layout.alignment_offset(self.longest_width);
 
-        for (i, line) in self.wrapped_lines.iter().enumerate() {
-            let is_last = i + 1 == self.wrapped_lines.len();
+        // No row ending before the offset can hold it.
+        let first_candidate = self.rows.partition_point(|range| range.end < offset);
+        for (i, range) in self.rows.iter().enumerate().skip(first_candidate) {
+            let is_last = i + 1 == self.rows.len();
 
-            let matches = if line.len == 0 {
+            let matches = if range.is_empty() {
                 // Empty visual lines still own their boundary offset.
-                offset == acc_len
+                offset == range.start
             } else if is_last || line_end_affinity {
                 // Inclusive: cursor can sit at end of this visual line.
-                offset >= acc_len && offset <= acc_len + line.len
+                offset >= range.start && offset <= range.end
             } else {
                 // Exclusive: boundary offset belongs to the next visual line.
-                offset >= acc_len && offset < acc_len + line.len
+                offset >= range.start && offset < range.end
             };
 
             if matches {
-                let x = line.x_for_index(offset.saturating_sub(acc_len))
+                // A row outside the shaped window is off screen, so it only
+                // needs the right row, not the right column.
+                let x = self
+                    .shaped_row(i)
+                    .map_or(px(0.), |line| line.x_for_index(offset - range.start))
                     + x_offset
                     + self.line_indent(i);
-                return Some(point(x, offset_y));
+                return Some(point(x, last_layout.line_height * i));
             }
-
-            // Always advance by actual line length. The last line gets +1 so the
-            // cursor can be placed after the final character.
-            acc_len += if is_last { line.len + 1 } else { line.len };
-            offset_y += last_layout.line_height;
         }
 
         None
@@ -1163,19 +1384,17 @@ impl LineLayout {
     /// visual line. Wrapped layouts must use [`Self::closest_index_for_position`], which also
     /// reports the caret affinity that a wrap boundary needs.
     pub(crate) fn closest_index_for_x(&self, x: Pixels, last_layout: &LastLayout) -> usize {
-        let mut acc_len = 0;
         let x_offset = last_layout.alignment_offset(self.longest_width);
         let x = x - x_offset;
 
-        for (i, line) in self.wrapped_lines.iter().enumerate() {
+        for (i, start, line) in self.shaped_rows() {
             let line_indent = self.line_indent(i);
             if x <= line_indent + line.width {
-                return acc_len + line.closest_index_for_x(x - line_indent);
+                return start + line.closest_index_for_x(x - line_indent);
             }
-            acc_len += line.len;
         }
 
-        acc_len
+        self.len
     }
 
     /// Resolve `pos` to the wrapped sub-line under it.
@@ -1187,21 +1406,13 @@ impl LineLayout {
         pos: Point<Pixels>,
         last_layout: &LastLayout,
     ) -> Option<(usize, usize, Pixels)> {
-        let mut offset = 0;
-        let mut line_top = px(0.);
-        let x_offset = last_layout.alignment_offset(self.longest_width);
-
-        for (i, line) in self.wrapped_lines.iter().enumerate() {
-            let line_bottom = line_top + last_layout.line_height;
-            if pos.y >= line_top && pos.y < line_bottom {
-                return Some((i, offset, pos.x - x_offset - self.line_indent(i)));
-            }
-
-            offset += line.len;
-            line_top = line_bottom;
+        if pos.y < px(0.) || last_layout.line_height <= px(0.) {
+            return None;
         }
-
-        None
+        let row = (pos.y / last_layout.line_height).floor() as usize;
+        let range = self.rows.get(row)?;
+        let x_offset = last_layout.alignment_offset(self.longest_width);
+        Some((row, range.start, pos.x - x_offset - self.line_indent(row)))
     }
 
     /// Get the index for the given position (x, y) in this line layout.
@@ -1220,9 +1431,12 @@ impl LineLayout {
         last_layout: &LastLayout,
     ) -> Option<(usize, bool)> {
         let (i, offset, x) = self.wrapped_line_at(pos, last_layout)?;
-        let line = &self.wrapped_lines[i];
+        // A row outside the shaped window is off screen: its start will do.
+        let Some(line) = self.shaped_row(i) else {
+            return Some((offset, false));
+        };
         let ix = line.closest_index_for_x(x);
-        let line_end_affinity = i + 1 < self.wrapped_lines.len() && ix == line.len;
+        let line_end_affinity = i + 1 < self.rows.len() && ix == line.len;
 
         Some((offset + ix, line_end_affinity))
     }
@@ -1246,11 +1460,14 @@ impl LineLayout {
             return 0;
         };
 
-        if i + 1 < self.wrapped_lines.len() || last_layout.space_width <= px(0.) {
+        if i + 1 < self.rows.len() || last_layout.space_width <= px(0.) {
             return 0;
         }
+        let Some(line) = self.shaped_row(i) else {
+            return 0;
+        };
 
-        let past_end = x - self.wrapped_lines[i].width;
+        let past_end = x - line.width;
         if past_end <= px(0.) {
             return 0;
         }
@@ -1265,18 +1482,16 @@ impl LineLayout {
     ) -> Option<usize> {
         let (i, offset, x) = self.wrapped_line_at(pos, last_layout)?;
 
-        Some(offset + self.wrapped_lines[i].index_for_x(x)?)
+        Some(offset + self.shaped_row(i)?.index_for_x(x)?)
     }
 
     pub(crate) fn size(&self, line_height: Pixels) -> Size<Pixels> {
         let width = self
-            .wrapped_lines
-            .iter()
-            .enumerate()
-            .map(|(ix, line)| line.width + self.line_indent(ix))
+            .shaped_rows()
+            .map(|(ix, _, line)| line.width + self.line_indent(ix))
             .max()
             .unwrap_or(self.longest_width);
-        size(width, self.wrapped_lines.len() * line_height)
+        size(width, self.rows.len() * line_height)
     }
 
     /// Paint only the glyph background quads of this line.
@@ -1298,7 +1513,7 @@ impl LineLayout {
             return;
         }
 
-        for (ix, line) in self.wrapped_lines.iter().enumerate() {
+        for (ix, _, line) in self.shaped_rows() {
             _ = line.paint_background(
                 pos + point(self.line_indent(ix), ix * line_height),
                 line_height,
@@ -1319,7 +1534,7 @@ impl LineLayout {
         window: &mut Window,
         cx: &mut App,
     ) {
-        for (ix, line) in self.wrapped_lines.iter().enumerate() {
+        for (ix, _, line) in self.shaped_rows() {
             _ = line.paint(
                 pos + point(self.line_indent(ix), ix * line_height),
                 line_height,
@@ -1586,6 +1801,81 @@ mod tests {
         assert_eq!(wrap("abc", 0., WrappingIndent::None), vec![1, 2]);
         // Closing punctuation stays with the preceding Chinese character.
         assert_eq!(wrap("你好，世界", 2., WrappingIndent::None), vec![3, 9]);
+    }
+
+    #[test]
+    fn rewrapping_around_an_edit_matches_wrapping_the_whole_line() {
+        let measure = |text: &str| {
+            px(text
+                .chars()
+                .map(|c| if c.is_ascii() { 1. } else { 2. })
+                .sum())
+        };
+        let mut wrap = |line: &str, width: Pixels, _: usize| {
+            measured_wrap(line, width, WrappingIndent::Same, measure)
+        };
+        let words = [
+            "lorem",
+            "ipsum",
+            "høj",
+            "dolor",
+            "a",
+            "sit-amet",
+            "mærke",
+            "consectetur",
+        ];
+        let line: String = (0..24_000)
+            .map(|ix| words[(ix * 7 + ix / 3) % words.len()])
+            .collect::<Vec<_>>()
+            .join(" ");
+        let width = px(40.);
+        let mut text = Rope::from(format!("short\n{line}\nafter"));
+        let mut wrapper = TextWrapper::new(test_font(), px(14.), Some(width));
+        let whole = text.clone();
+        wrapper.update_lines(&whole, &(0..whole.len()), &whole, false, true, &mut wrap);
+
+        let line_start = text.line_start_offset(1);
+        let edits: [(usize, usize, &str); 9] = [
+            (0, 0, "x"),
+            (10, 11, ""),
+            (500, 500, " "),
+            (500, 501, ""),
+            (2_000, 2_000, "abcdefghijklmnopqrstuvwxyz"),
+            (70_000, 70_010, "ø"),
+            (100_000, 100_000, " a b c "),
+            (line.len() - 3, line.len() - 3, "zz"),
+            (60_000, 60_000, &"wide ".repeat(40)),
+        ];
+        for (start, end, inserted) in edits {
+            let mut start = line_start + start;
+            let mut end = line_start + end;
+            while !text.is_char_boundary(start) {
+                start -= 1;
+            }
+            while !text.is_char_boundary(end) {
+                end += 1;
+            }
+            text.replace(start..end, inserted);
+            wrapper.update_lines(
+                &text,
+                &(start..end),
+                &Rope::from(inserted),
+                false,
+                true,
+                &mut wrap,
+            );
+
+            let mut expected = TextWrapper::new(test_font(), px(14.), Some(width));
+            expected.update_lines(&text, &(0..text.len()), &text, false, false, &mut wrap);
+            assert_eq!(wrapper.lines_count(), expected.lines_count());
+            for row in 0..expected.lines_count() {
+                assert_eq!(
+                    wrapper.line(row).unwrap().wrapped_lines,
+                    expected.line(row).unwrap().wrapped_lines,
+                    "row {row} after replacing {start}..{end} with {inserted:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1945,6 +2235,7 @@ mod tests {
             visible_buffer_lines: vec![0],
             visible_line_byte_offsets: vec![0],
             visible_top: px(0.),
+            visible_display_rows: 0..0,
             visible_range_offset: 0..0,
             lines: Rc::new(vec![]),
             line_height,
@@ -2252,6 +2543,7 @@ mod tests {
             visible_buffer_lines: vec![0],
             visible_line_byte_offsets: vec![0],
             visible_top: px(0.),
+            visible_display_rows: 0..0,
             visible_range_offset: 0..0,
             lines: Rc::new(vec![]),
             line_height: px(20.0),
