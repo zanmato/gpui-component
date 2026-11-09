@@ -5217,7 +5217,7 @@ mod tests {
             editor.update(cx, |state, cx| state.focus(window, cx));
             assert_eq!(frame(window, cx), 1, "focused");
             assert_eq!(frame(window, cx), 0, "the caret stands still");
-            editor.update(cx, |state, cx| state.set_selected_range(5..5, cx));
+            editor.update(cx, |state, cx| state.set_selected_range(5..5, window, cx));
             assert_eq!(frame(window, cx), 1, "the caret moved");
             assert_eq!(frame(window, cx), 0, "the caret stands still");
 
