@@ -4953,7 +4953,7 @@ mod tests {
     use crate::input::{
         Editor, EditorMode, EditorState, FoldPlaceholderRenderer, FoldRange, GutterDecoration,
         GutterDecorationCollection, OverviewRulerDecoration, OverviewRulerDecorationCollection,
-    Position, RangeDecoration, Redo, TextDecoration, Undo, WrappingIndent,
+        Position, RangeDecoration, Redo, TextDecoration, Undo, WrappingIndent,
     };
     use gpui::{
         AppContext as _, Context, EntityInputHandler as _, ListAlignment, ListOffset, ListState,
@@ -6267,7 +6267,7 @@ mod tests {
     fn assert_horizontal_scroll_reaches_line_end(
         editor: &Entity<EditorState>,
         end: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) {
         let (layout, input_bounds, scroll_size) = {
@@ -6480,7 +6480,7 @@ mod tests {
         let mut cx = VisualTestContext::from_window(window.into(), cx);
         let (baseline_width, baseline_wrap, body_height, body_glyph_width) =
             cx.update(|window, cx| {
-                editor.update(cx, |state, cx| state.set_selected_range(0..0, cx));
+                editor.update(cx, |state, cx| state.set_selected_range(0..0, window, cx));
                 window.draw(cx).clear(cx);
                 let state = editor.read(cx);
                 let layout = state.last_layout.as_ref().unwrap();

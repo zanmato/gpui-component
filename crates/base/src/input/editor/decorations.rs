@@ -1162,11 +1162,11 @@ mod tests {
 
         cx.update(|window, cx| {
             state.update(cx, |state, cx| {
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 state.insert("ab", window, cx);
-                state.set_selected_range(5..5, cx);
+                state.set_selected_range(5..5, window, cx);
                 state.insert("x", window, cx);
-                state.set_selected_range(9..14, cx);
+                state.set_selected_range(9..14, window, cx);
                 state.replace("", window, cx);
             })
         });

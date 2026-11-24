@@ -223,15 +223,6 @@ fn popover_origin(
     point(x, y)
 }
 
-#[cfg(not(feature = "gpui-fast"))]
-impl IntoElement for SignatureHelpPlacement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 struct PlacementLayout {
     origin: gpui::Point<Pixels>,
     popover: AnyElement,

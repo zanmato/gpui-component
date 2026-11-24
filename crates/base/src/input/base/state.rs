@@ -6123,9 +6123,9 @@ mod tests {
         view.window_handle
             .update(cx, |_, window, cx| {
                 view.input.update(cx, |state, cx| {
-                    state.set_selected_range(9..9, cx);
+                    state.set_selected_range(9..9, window, cx);
                     state.insert("!", window, cx);
-                    state.set_selected_range(9..9, cx);
+                    state.set_selected_range(9..9, window, cx);
                     state.set_tokens(bold("a **b** c!"), cx).unwrap();
                     assert_eq!(state.value(), "a **b** c!");
                     assert_eq!(state.selected_range(), 9..9);
@@ -6139,7 +6139,7 @@ mod tests {
                         .set_tokens(InputContent::new("a **b** c!"), cx)
                         .unwrap();
                     assert!(state.tokens().is_empty());
-                    state.set_selected_range(4..4, cx);
+                    state.set_selected_range(4..4, window, cx);
                     assert_eq!(
                         state.set_tokens(bold("a **b** c!"), cx),
                         Err(InlineTokenError::SplitsSelection)
@@ -6156,9 +6156,9 @@ mod tests {
         use crate::input::{InlineToken, InlineTokenError, InputContent};
         let view = InputView::build_textarea(cx, |state| state.default_value("a **b** c"));
         view.window_handle
-            .update(cx, |_, _, cx| {
+            .update(cx, |_, window, cx| {
                 view.input.update(cx, |state, cx| {
-                    state.set_selected_range(9..9, cx);
+                    state.set_selected_range(9..9, window, cx);
                     let id = state.selections.generate_id();
                     state.selections.add(CursorSelection::new(id, 4, 4));
                     let content = InputContent::new("a **b** c")
@@ -6186,9 +6186,9 @@ mod tests {
         view.window_handle
             .update(cx, |_, window, cx| {
                 view.input.update(cx, |state, cx| {
-                    state.set_selected_range(4..4, cx);
+                    state.set_selected_range(4..4, window, cx);
                     state.insert("b", window, cx);
-                    state.set_selected_range(9..9, cx);
+                    state.set_selected_range(9..9, window, cx);
                     state.set_tokens(bold("a **b** c", 2..7), cx).unwrap();
 
                     state.undo(&Undo, window, cx);
@@ -6199,9 +6199,9 @@ mod tests {
                     assert!(state.tokens().is_empty());
                     assert_eq!(state.selected_range(), 5..5);
 
-                    state.set_selected_range(0..0, cx);
+                    state.set_selected_range(0..0, window, cx);
                     state.insert("z", window, cx);
-                    state.set_selected_range(10..10, cx);
+                    state.set_selected_range(10..10, window, cx);
                     state.set_tokens(bold("za **b** c", 3..8), cx).unwrap();
 
                     state.undo(&Undo, window, cx);
@@ -9638,7 +9638,7 @@ mod tests {
                 assert_eq!(state.next_word_delete_end_at(3, true), 5);
 
                 state.set_value("    four leading spaces", window, cx);
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 state.delete_next_word(&DeleteToNextWordEnd, window, cx);
                 #[cfg(not(target_os = "macos"))]
                 assert_eq!(state.value(), "four leading spaces");
@@ -12291,7 +12291,7 @@ mod tests {
         cx.update(|window, cx| {
             input.update(cx, |state, cx| {
                 state.set_value(text.clone(), window, cx);
-                state.set_selected_range(0..0, cx);
+                state.set_selected_range(0..0, window, cx);
                 for &end in &ends {
                     state.right(&MoveRight, window, cx);
                     assert_eq!(state.cursor(), end);
@@ -12301,7 +12301,7 @@ mod tests {
                     assert_eq!(state.cursor(), end);
                 }
 
-                state.set_selected_range(ends[3]..ends[3], cx);
+                state.set_selected_range(ends[3]..ends[3], window, cx);
                 state.backspace(&Backspace, window, cx);
                 assert_eq!(
                     state.value(),

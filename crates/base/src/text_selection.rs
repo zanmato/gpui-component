@@ -3685,12 +3685,11 @@ pub(crate) fn clear_window_text_selection(window_id: gpui::WindowId, cx: &mut Ap
 mod tests {
     use super::*;
     use crate::ElementExt as _;
-    #[cfg(feature = "gpui-fast")]
+    use gpui::StatefulInteractiveElement as _;
     use gpui::{
         Bounds, ContentMask, Context, Hitbox, HitboxBehavior, HitboxId, InteractiveElement as _,
-        IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-        Styled as _, StyledText, TestAppContext, TextLayout, Window, div, point,
-        prelude::FluentBuilder as _, px, size,
+        IntoElement, ParentElement as _, Render, SharedString, Styled as _, StyledText,
+        TestAppContext, TextLayout, Window, div, point, prelude::FluentBuilder as _, px, size,
     };
     use std::{
         cell::{Cell, RefCell},
