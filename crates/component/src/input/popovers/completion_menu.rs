@@ -13,6 +13,15 @@ use lsp_types::CompletionItem;
 const MAX_MENU_HEIGHT: Pixels = px(240.);
 const POPOVER_GAP: Pixels = px(4.);
 
+/// The item's `labelDetails.description`, when it has a non empty one.
+fn label_description(item: &CompletionItem) -> Option<&str> {
+    item.label_details
+        .as_ref()?
+        .description
+        .as_deref()
+        .filter(|description| !description.is_empty())
+}
+
 /// Drop ranges a custom highlighter cannot safely paint, then order the rest.
 ///
 /// A range past the label, or one that begins or ends inside a character,
@@ -126,6 +135,7 @@ impl RenderOnce for CompletionMenuItem {
         let item = self.item;
 
         let deprecated = item.deprecated.unwrap_or(false);
+        let description = label_description(&item).map(SharedString::from);
         let highlights = retained_highlight_ranges(
             &item.label,
             (self.highlight)(self.query.as_ref(), item.as_ref()),
@@ -158,12 +168,30 @@ impl RenderOnce for CompletionMenuItem {
                     .gap_3()
                     .justify_between()
                     .child(StyledText::new(item.label.clone()).with_highlights(highlights))
-                    .when_some(item.detail.as_ref(), |this, detail| {
+                    .when(item.detail.is_some() || description.is_some(), |this| {
                         this.child(
-                            Label::new(detail.clone())
-                                .text_color(cx.theme().muted_foreground)
-                                .when(deprecated, |this| this.line_through())
-                                .italic(),
+                            h_flex()
+                                .flex_shrink_0()
+                                .gap_2()
+                                .when_some(item.detail.as_ref(), |this, detail| {
+                                    this.child(
+                                        Label::new(detail.clone())
+                                            .text_color(cx.theme().muted_foreground)
+                                            .when(deprecated, |this| this.line_through())
+                                            .italic(),
+                                    )
+                                })
+                                // LSP's label description says where an item
+                                // comes from (a module, a file, a table), so
+                                // it comes last and fainter than the detail.
+                                .when_some(description, |this, description| {
+                                    this.child(
+                                        Label::new(description)
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground.opacity(0.75))
+                                            .when(deprecated, |this| this.line_through()),
+                                    )
+                                }),
                         )
                     }),
             )
@@ -381,7 +409,9 @@ impl CompletionMenu {
                 .iter()
                 .enumerate()
                 .max_by_key(|(_, item)| {
-                    item.label.len() + item.detail.as_ref().map(|d| d.len()).unwrap_or(0)
+                    item.label.len()
+                        + item.detail.as_ref().map_or(0, |detail| detail.len())
+                        + label_description(item).map_or(0, str::len)
                 })
                 .map(|(ix, _)| ix)
                 .unwrap_or(0);
@@ -515,6 +545,22 @@ mod tests {
             vec![0..3]
         );
         assert_eq!(retained_highlight_ranges("你", [0..1, 0..3]), vec![0..3]);
+    }
+
+    #[test]
+    fn label_description_skips_missing_and_empty_descriptions() {
+        let with = |description: Option<&str>| CompletionItem {
+            label: "name".into(),
+            label_details: Some(lsp_types::CompletionItemLabelDetails {
+                detail: None,
+                description: description.map(str::to_string),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(label_description(&with(Some("users"))), Some("users"));
+        assert_eq!(label_description(&with(Some(""))), None);
+        assert_eq!(label_description(&with(None)), None);
+        assert_eq!(label_description(&CompletionItem::default()), None);
     }
 
     #[gpui::test]
